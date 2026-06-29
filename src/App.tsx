@@ -452,9 +452,9 @@ export default function App() {
   const getContractExpiryStatus = (expiryDate?: string) => {
     if (!expiryDate) return { label: 'No Contract', color: 'text-slate-400 bg-slate-50 border-slate-200', remainingDays: null, level: 'info' };
     
-    const today = new Date();
+    const baselineNow = import.meta.env.VITE_REPLAY_DATE ? new Date(String(import.meta.env.VITE_REPLAY_DATE)) : new Date();
     const expiry = new Date(expiryDate);
-    const diffTime = expiry.getTime() - today.getTime();
+    const diffTime = expiry.getTime() - baselineNow.getTime();
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
     
     if (diffDays < 0) {
@@ -1622,9 +1622,9 @@ export default function App() {
           {activeTab === 'AGENTS' && (() => {
             const expiringSoonAgents = agents.filter(agent => {
               if (!agent.contractExpiryDate || agent.contractResiliationDate) return false;
-              const today = new Date();
+              const baselineNow = import.meta.env.VITE_REPLAY_DATE ? new Date(String(import.meta.env.VITE_REPLAY_DATE)) : new Date();
               const expiry = new Date(agent.contractExpiryDate);
-              const diffTime = expiry.getTime() - today.getTime();
+              const diffTime = expiry.getTime() - baselineNow.getTime();
               const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
               return diffDays >= 0 && diffDays <= 15;
             });
@@ -1650,8 +1650,8 @@ export default function App() {
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-1">
                       {expiringSoonAgents.map(agent => {
                         const expiry = new Date(agent.contractExpiryDate!);
-                        const today = new Date();
-                        const diffDays = Math.ceil((expiry.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                        const baselineNow = import.meta.env.VITE_REPLAY_DATE ? new Date(String(import.meta.env.VITE_REPLAY_DATE)) : new Date();
+                        const diffDays = Math.ceil((expiry.getTime() - baselineNow.getTime()) / (1000 * 60 * 60 * 24));
                         return (
                           <div key={agent.id} className="bg-white border border-amber-200 rounded-xl p-4 flex flex-col justify-between shadow-sm hover:shadow-md transition-all">
                             <div>

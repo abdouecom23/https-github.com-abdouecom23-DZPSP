@@ -33,6 +33,7 @@ export interface UserAccount {
   proofOfAddressExpiryDate?: string;
   documentStatusAlert?: 'ACTIVE' | 'EXPIRING_SOON' | 'EXPIRED';
   status?: 'ACTIVE' | 'SUSPENDED' | 'RELATED_SUSPEND_RISK';
+  isSuspended?: boolean;
 }
 
 export type TransactionType = 'CASH_IN' | 'CASH_OUT' | 'TRANSFER' | 'AGENT_CASH_IN' | 'AGENT_CASH_OUT';

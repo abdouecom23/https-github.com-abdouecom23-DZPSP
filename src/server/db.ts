@@ -281,11 +281,13 @@ class JSONDatabase {
 
   public save() {
     try {
-      const tempFile = `${DB_FILE}.tmp.${Date.now()}`;
+      const dir = path.dirname(DB_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const tempFile = DB_FILE + '.tmp';
       fs.writeFileSync(tempFile, JSON.stringify(this.data, null, 2), 'utf-8');
-      fs.renameSync(tempFile, DB_FILE);
+      fs.renameSync(tempFile, DB_FILE); // atomic rename on POSIX
     } catch (e) {
-      console.error("Failed to persist database file", e);
+      console.error("Failed to persist database file atomically", e);
     }
   }
 
@@ -743,6 +745,18 @@ class JSONDatabase {
 
     let senderAcc = isTransfer || isCashOut ? this.getAccountByIban(params.senderIban) : null;
     let receiverAcc = isTransfer || isCashIn ? this.getAccountByIban(params.receiverIban) : null;
+
+    // Enforce operational suspension if present
+    if (senderAcc && senderAcc.isSuspended) {
+      const errorMsg = `ACCOUNT_SUSPENDED: Sender account ${senderAcc.id} is suspended/blocked by compliance.`;
+      this.trackFailedTransaction(params, errorMsg);
+      throw new Error(errorMsg);
+    }
+    if (receiverAcc && receiverAcc.isSuspended) {
+      const errorMsg = `ACCOUNT_SUSPENDED: Receiver account ${receiverAcc.id} is suspended/blocked by compliance.`;
+      this.trackFailedTransaction(params, errorMsg);
+      throw new Error(errorMsg);
+    }
 
     // A. CENTRALIZED RISK BLACKLIST CHECK
     if (this.isEntityBlocked(params.senderIban, 'IBAN') || 
@@ -1421,7 +1435,10 @@ class JSONDatabase {
   public addBlockedEntity(entityType: 'ACCOUNT' | 'IBAN' | 'IP' | 'DEVICE_ID', entityValue: string, reason: string, blockedBy: string) {
     const cleanValue = entityValue.trim().replace(/\s/g, '');
     const existing = this.data.blockedEntities.find(b => b.entityType === entityType && b.entityValue.trim().replace(/\s/g, '') === cleanValue && b.status === 'ACTIVE');
-    if (existing) return existing;
+    if (existing) {
+      // Return existing entry so the API caller gets feedback (avoid silent no-op)
+      return existing;
+    }
 
     const blocked: BlockedEntity = {
       id: `blk-${Date.now()}`,
@@ -1440,17 +1457,17 @@ class JSONDatabase {
       'CRITICAL'
     );
 
-    // If account block, suspend account
+    // If account/IBAN block, mark account as suspended (operational flag) so executeTransaction enforces it
     if (entityType === 'ACCOUNT') {
       const acc = this.getAccountById(entityValue);
       if (acc) {
-        acc.status = 'SUSPENDED';
+        acc.isSuspended = true;
         this.cascadingDeactivationCheck(acc.id);
       }
     } else if (entityType === 'IBAN') {
       const acc = this.getAccountByIban(entityValue);
       if (acc) {
-        acc.status = 'SUSPENDED';
+        acc.isSuspended = true;
         this.cascadingDeactivationCheck(acc.id);
       }
     }
@@ -1472,14 +1489,14 @@ class JSONDatabase {
       status === 'LIFTED' ? 'INFO' : 'WARNING'
     );
 
-    // If lifted, restore status
+    // If lifted, clear isSuspended operational flag
     if (status === 'LIFTED') {
       if (entry.entityType === 'ACCOUNT') {
         const acc = this.getAccountById(entry.entityValue);
-        if (acc) acc.status = 'ACTIVE';
+        if (acc) acc.isSuspended = false;
       } else if (entry.entityType === 'IBAN') {
         const acc = this.getAccountByIban(entry.entityValue);
-        if (acc) acc.status = 'ACTIVE';
+        if (acc) acc.isSuspended = false;
       }
     }
 
@@ -1960,19 +1977,17 @@ class JSONDatabase {
     const flaggedAcc = this.getAccountById(flaggedAccountId);
     if (!flaggedAcc) return;
 
-    const emailDomain = flaggedAcc.email.split('@')[1];
+    const emailParts = flaggedAcc.email.split('@');
+    const emailDomain = emailParts.length > 1 ? emailParts[1] : '';
     const phonePrefix = flaggedAcc.phoneNumber.substring(0, 7);
 
-    // Find related accounts: same email domain (excluding generic like gmail), or same phone prefix
     const isGenericDomain = ['gmail.com', 'outlook.com', 'yahoo.com', 'hotmail.com', 'mail.ru'].includes(emailDomain.toLowerCase());
 
     const related = this.data.accounts.filter(a => {
       if (a.id === flaggedAccountId) return false;
-      const otherDomain = a.email.split('@')[1];
-      
+      const otherDomain = a.email.split('@')[1] || '';
       const domainMatch = !isGenericDomain && otherDomain.toLowerCase() === emailDomain.toLowerCase();
       const phonePrefixMatch = a.phoneNumber.substring(0, 7) === phonePrefix;
-      
       return domainMatch || phonePrefixMatch;
     });
 
@@ -1980,7 +1995,7 @@ class JSONDatabase {
       acc.status = 'RELATED_SUSPEND_RISK';
       this.logAudit(
         'CASCADING_DEACTIVATION_ALERT',
-        `Account ${acc.name} flagged with RELATED_SUSPEND_RISK. High association with suspended account ${flaggedAcc.name} (Shared properties: ${!isGenericDomain && acc.email.endsWith(emailDomain) ? 'domain: ' + emailDomain : 'phone area: ' + phonePrefix}).`,
+        `Account ${acc.name} flagged with RELATED_SUSPEND_RISK due to association with suspended account ${flaggedAcc.name}. Shared attributes: ${!isGenericDomain ? `email domain ${emailDomain}` : 'phone prefix match'}.`,
         'WARNING'
       );
     });
