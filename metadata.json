@@ -1,0 +1,6 @@
+{
+  "name": "DinarFlow",
+  "description": "Algerian Payment Service Provider (PSP) compliance platform with tiered accounts, dual-entry ledger, KYC processing, and agent networks.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
