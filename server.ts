@@ -131,10 +131,62 @@ app.post('/api/accounts/:id/kyc-reject-simulate', (req, res) => {
   }
 });
 
+// KYC Supervisor Appeals
+app.post('/api/accounts/:id/kyc-exception-request', (req, res) => {
+  try {
+    const { reason } = req.body;
+    if (!reason) return res.status(400).json({ error: 'Missing reason for exception request' });
+    const acc = db.requestKycExceptionBypass(req.params.id, reason);
+    res.json(acc);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/accounts/:id/kyc-exception-approve', (req, res) => {
+  try {
+    const { supervisorName } = req.body;
+    if (!supervisorName) return res.status(400).json({ error: 'Missing supervisor name' });
+    const acc = db.approveKycExceptionBypass(req.params.id, supervisorName);
+    res.json(acc);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // Transactions & Ledger
 app.get('/api/transactions', (req, res) => {
   try {
     res.json(db.getTransactions());
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Search Transactions Compliance API
+app.get('/api/transactions/search', (req, res) => {
+  try {
+    const { senderIban, receiverIban, startDate, endDate, type, minAmount, maxAmount } = req.query;
+    let txs = db.getTransactions();
+    
+    if (senderIban) txs = txs.filter(t => t.senderIban.replace(/\s/g, '').includes((senderIban as string).replace(/\s/g, '')));
+    if (receiverIban) txs = txs.filter(t => t.receiverIban.replace(/\s/g, '').includes((receiverIban as string).replace(/\s/g, '')));
+    if (type) txs = txs.filter(t => t.type === type);
+    
+    if (startDate) {
+      const start = new Date(startDate as string);
+      txs = txs.filter(t => new Date(t.timestamp) >= start);
+    }
+    
+    if (endDate) {
+      const end = new Date(endDate as string);
+      txs = txs.filter(t => new Date(t.timestamp) <= end);
+    }
+    
+    if (minAmount) txs = txs.filter(t => t.amount >= Number(minAmount));
+    if (maxAmount) txs = txs.filter(t => t.amount <= Number(maxAmount));
+    
+    res.json(txs);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -240,6 +292,48 @@ app.post('/api/agents/:id/status', (req, res) => {
   }
 });
 
+// Agent Commission Settlements
+app.get('/api/agents/commission/settlements', (req, res) => {
+  try {
+    res.json(db.getCommissionSettlements());
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/agents/commission/request', (req, res) => {
+  try {
+    const { agentId } = req.body;
+    if (!agentId) return res.status(400).json({ error: 'Missing agentId' });
+    const settlement = db.requestCommissionPayout(agentId);
+    res.json(settlement);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/agents/commission/approve', (req, res) => {
+  try {
+    const { settlementId, approvedBy } = req.body;
+    if (!settlementId || !approvedBy) return res.status(400).json({ error: 'Missing settlementId or approvedBy' });
+    const settlement = db.approveCommissionPayout(settlementId, approvedBy);
+    res.json(settlement);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/agents/commission/pay', (req, res) => {
+  try {
+    const { settlementId, paymentReference } = req.body;
+    if (!settlementId || !paymentReference) return res.status(400).json({ error: 'Missing settlementId or paymentReference' });
+    const settlement = db.markCommissionAsPaid(settlementId, paymentReference);
+    res.json(settlement);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // Cantonnement & Reconciliation
 app.get('/api/cantonment', (req, res) => {
   try {
@@ -287,10 +381,86 @@ app.post('/api/guarantee/update', (req, res) => {
   }
 });
 
+// Guarantee Renewals API
+app.get('/api/guarantee/renewals', (req, res) => {
+  try {
+    res.json(db.getGuaranteeRenewals());
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/guarantee/renewal-request', (req, res) => {
+  try {
+    const { amount, expiryDate } = req.body;
+    if (!amount || !expiryDate) return res.status(400).json({ error: 'Missing amount or expiryDate' });
+    const renewal = db.requestGuaranteeRenewal(Number(amount), expiryDate);
+    res.json(renewal);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/guarantee/renewal-approve', (req, res) => {
+  try {
+    const { renewalId, bankOfficer } = req.body;
+    if (!renewalId || !bankOfficer) return res.status(400).json({ error: 'Missing renewalId or bankOfficer' });
+    const renewal = db.approveGuaranteeRenewal(renewalId, bankOfficer);
+    res.json(renewal);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/guarantee/renewal-issue', (req, res) => {
+  try {
+    const { renewalId } = req.body;
+    if (!renewalId) return res.status(400).json({ error: 'Missing renewalId' });
+    const guarantee = db.issueGuaranteeRenewal(renewalId);
+    res.json(guarantee);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // Audit Logs
 app.get('/api/audit-logs', (req, res) => {
   try {
     res.json(db.getAuditLogs());
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Audit Logs Search Compliance API
+app.get('/api/audit-logs/search', (req, res) => {
+  try {
+    const { action, severity, startDate, endDate, keyword } = req.query;
+    let logs = db.getAuditLogs();
+    
+    if (action) logs = logs.filter(l => l.action === action);
+    if (severity) logs = logs.filter(l => l.severity === severity);
+    
+    if (startDate) {
+      const start = new Date(startDate as string);
+      logs = logs.filter(l => new Date(l.timestamp) >= start);
+    }
+    
+    if (endDate) {
+      const end = new Date(endDate as string);
+      logs = logs.filter(l => new Date(l.timestamp) <= end);
+    }
+    
+    if (keyword) {
+      const kw = (keyword as string).toLowerCase();
+      logs = logs.filter(l => 
+        l.details.toLowerCase().includes(kw) || 
+        l.action.toLowerCase().includes(kw) ||
+        (l.ipAddress && l.ipAddress.toLowerCase().includes(kw))
+      );
+    }
+    
+    res.json(logs);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -447,9 +617,33 @@ async function startServer() {
     });
   }
 
+  // Start background compliance safeguarding worker
+  startReconciliationWorker();
+
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`DinarFlow platform running on http://0.0.0.0:${PORT}`);
   });
+}
+
+function startReconciliationWorker() {
+  console.log("Safeguarding Cantonment Reconciliation Worker started (Background Daemon)...");
+  // Run an immediate reconciliation on start
+  try {
+    const record = db.reconcileCantonment("Background Automated Safeguarding Worker");
+    console.log(`[Reconciliation Worker] Initial Cantonment reconciled: difference is ${record.difference} DA. Status: ${record.status}`);
+  } catch (e: any) {
+    console.error("[Reconciliation Worker] Initial Safeguarding reconciliation failed: ", e.message);
+  }
+
+  // Re-run every 30 seconds
+  setInterval(() => {
+    try {
+      const record = db.reconcileCantonment("Background Automated Safeguarding Worker");
+      console.log(`[Reconciliation Worker] Cantonment reconciled: difference is ${record.difference} DA. Status: ${record.status}`);
+    } catch (e: any) {
+      console.error("[Reconciliation Worker] Safeguarding reconciliation failed: ", e.message);
+    }
+  }, 30000); // 30 seconds interval
 }
 
 startServer();

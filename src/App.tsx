@@ -67,6 +67,8 @@ export default function App() {
   const [cantonment, setCantonment] = useState<CantonmentRecord[]>([]);
   const [guarantee, setGuarantee] = useState<BankGuarantee | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [commissionSettlements, setCommissionSettlements] = useState<any[]>([]);
+  const [guaranteeRenewals, setGuaranteeRenewals] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Modals & Active Action States
@@ -98,8 +100,8 @@ export default function App() {
   // Mobile sidebar state
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-  // Agents sub tab state ('LIST' or 'REPOSITORY')
-  const [agentsSubTab, setAgentsSubTab] = useState<'LIST' | 'REPOSITORY'>('LIST');
+  // Agents sub tab state ('LIST' or 'REPOSITORY' or 'SETTLEMENTS')
+  const [agentsSubTab, setAgentsSubTab] = useState<'LIST' | 'REPOSITORY' | 'SETTLEMENTS'>('LIST');
 
   // Sandbox Transaction Form State
   const [txForm, setTxForm] = useState({
@@ -173,7 +175,9 @@ export default function App() {
         resAgents,
         resCantonment,
         resGuarantee,
-        resAuditLogs
+        resAuditLogs,
+        resSettlements,
+        resRenewals
       ] = await Promise.all([
         fetch(`/api/stats?t=${Date.now()}`).then(r => r.json()),
         fetch(`/api/accounts?t=${Date.now()}`).then(r => r.json()),
@@ -181,7 +185,9 @@ export default function App() {
         fetch(`/api/agents?t=${Date.now()}`).then(r => r.json()),
         fetch(`/api/cantonment?t=${Date.now()}`).then(r => r.json()),
         fetch(`/api/guarantee?t=${Date.now()}`).then(r => r.json()),
-        fetch(`/api/audit-logs?t=${Date.now()}`).then(r => r.json())
+        fetch(`/api/audit-logs?t=${Date.now()}`).then(r => r.json()),
+        fetch(`/api/agents/commission/settlements?t=${Date.now()}`).then(r => r.json()),
+        fetch(`/api/guarantee/renewals?t=${Date.now()}`).then(r => r.json())
       ]);
 
       setStats(resStats);
@@ -191,6 +197,8 @@ export default function App() {
       setCantonment(resCantonment);
       setGuarantee(resGuarantee);
       setAuditLogs(resAuditLogs);
+      setCommissionSettlements(resSettlements || []);
+      setGuaranteeRenewals(resRenewals || []);
 
       // Sync active user dashboard balance & stats in real-time
       setCurrentUser(current => {
@@ -434,6 +442,137 @@ export default function App() {
       });
       if (!response.ok) throw new Error('Failed to update agent status');
       showToast('success', `Agent operational status updated.`);
+      fetchData();
+    } catch (err: any) {
+      showToast('error', err.message);
+    }
+  };
+
+  // --- Commission Settlements Actions ---
+  const handleRequestCommissionPayout = async (agentId: string) => {
+    try {
+      const response = await fetch('/api/agents/commission/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to request payout');
+      showToast('success', `Commission payout requested successfully.`);
+      fetchData();
+    } catch (err: any) {
+      showToast('error', err.message);
+    }
+  };
+
+  const handleApproveCommissionPayout = async (settlementId: string) => {
+    try {
+      const response = await fetch('/api/agents/commission/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settlementId, approvedBy: 'Compliance Officer (Admin)' })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to approve payout');
+      showToast('success', `Commission payout approved.`);
+      fetchData();
+    } catch (err: any) {
+      showToast('error', err.message);
+    }
+  };
+
+  const handlePayCommissionPayout = async (settlementId: string, ref: string) => {
+    try {
+      const response = await fetch('/api/agents/commission/pay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settlementId, paymentReference: ref })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to process payment');
+      showToast('success', `Commission payout successfully settled.`);
+      fetchData();
+    } catch (err: any) {
+      showToast('error', err.message);
+    }
+  };
+
+  // --- KYC Appeals Exceptions Actions ---
+  const handleRequestKycException = async (accountId: string, reason: string) => {
+    try {
+      const response = await fetch(`/api/accounts/${accountId}/kyc-exception-request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to file appeal');
+      showToast('success', `KYC supervisor review appeal submitted successfully.`);
+      fetchData();
+    } catch (err: any) {
+      showToast('error', err.message);
+    }
+  };
+
+  const handleApproveKycException = async (accountId: string) => {
+    try {
+      const response = await fetch(`/api/accounts/${accountId}/kyc-exception-approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ supervisorName: 'Chief Compliance Officer (Admin)' })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to approve appeal');
+      showToast('success', `KYC bypass exception approved. Cooldown cleared!`);
+      fetchData();
+    } catch (err: any) {
+      showToast('error', err.message);
+    }
+  };
+
+  // --- Guarantee Renewals Actions ---
+  const handleRequestGuaranteeRenewal = async (amount: number, expiry: string) => {
+    try {
+      const response = await fetch('/api/guarantee/renewal-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount, expiryDate: expiry })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to file renewal');
+      showToast('success', `Guarantee renewal request submitted.`);
+      fetchData();
+    } catch (err: any) {
+      showToast('error', err.message);
+    }
+  };
+
+  const handleApproveGuaranteeRenewal = async (renewalId: string) => {
+    try {
+      const response = await fetch('/api/guarantee/renewal-approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ renewalId, bankOfficer: 'Bank of Algeria Officer' })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to approve renewal');
+      showToast('success', `Guarantee renewal approved by bank officer.`);
+      fetchData();
+    } catch (err: any) {
+      showToast('error', err.message);
+    }
+  };
+
+  const handleIssueGuaranteeRenewal = async (renewalId: string) => {
+    try {
+      const response = await fetch('/api/guarantee/renewal-issue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ renewalId })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to issue renewal');
+      showToast('success', `Bank Guarantee renewed successfully! Platform active.`);
       fetchData();
     } catch (err: any) {
       showToast('error', err.message);
@@ -1129,8 +1268,26 @@ export default function App() {
                               {tx.fee > 0 ? `${tx.fee.toLocaleString()} DA` : '0'}
                             </td>
                             <td className="px-6 py-4 text-center">
-                              <div className="flex items-center justify-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 py-1 px-2 rounded-lg">
-                                <Lock className="w-3 h-3 shrink-0" /> Verified 2FA
+                              <div className="flex flex-col items-center gap-1">
+                                <div className="flex items-center justify-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 py-1 px-2 rounded-lg">
+                                  <Lock className="w-3 h-3 shrink-0" /> Verified 2FA
+                                </div>
+                                {tx.riskScore ? (
+                                  <div className={`inline-flex items-center gap-1 text-[9px] font-extrabold px-2 py-0.5 rounded border ${
+                                    tx.riskScore.score >= 70
+                                      ? 'bg-rose-50 text-rose-700 border-rose-200 animate-pulse'
+                                      : tx.riskScore.score >= 40
+                                      ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                      : 'bg-emerald-50 text-emerald-700 border-emerald-100'
+                                  }`}>
+                                    Risk: {tx.riskScore.score}/100
+                                    {tx.riskScore.factors && tx.riskScore.factors.length > 0 && (
+                                      <span className="opacity-75 font-normal ml-1">({tx.riskScore.factors.join(', ')})</span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="text-[9px] text-slate-400">Risk: Low</div>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -1316,6 +1473,112 @@ export default function App() {
 
               </div>
 
+              {/* Supervisor Review Queue (Appeals / Exceptions) */}
+              <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
+                <div>
+                  <h3 className="font-extrabold text-slate-800 text-base">KYC Exception Appeals &amp; Supervisor Bypass (Cooldown Gate)</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Under Bank of Algeria guidelines, rejected KYC applications trigger a 30-day cooldown period. Supervisors can review exception requests and bypass the cooldown gate.</p>
+                </div>
+
+                {/* Sub-section 1: Rejected accounts that can appeal */}
+                <div className="mt-6 space-y-4">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Step 1: File an Exception Appeal (For Rejected Accounts)</h4>
+                  <div className="overflow-x-auto border border-slate-100 rounded-lg">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead className="bg-slate-50 text-slate-500 font-bold uppercase">
+                        <tr>
+                          <th className="p-3">Rejected Account</th>
+                          <th className="p-3">Rejected At</th>
+                          <th className="p-3">Appeal Status</th>
+                          <th className="p-3">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {accounts.filter(a => a.kycUpgradeRejected).length === 0 ? (
+                          <tr>
+                            <td colSpan={4} className="p-4 text-center py-8 text-slate-400">No accounts are currently under KYC cooldown rejection. To test this, you can click "Simulate KYC Rejection" inside the sandbox or on a citizen's profile.</td>
+                          </tr>
+                        ) : (
+                          accounts.filter(a => a.kycUpgradeRejected).map(acc => (
+                            <tr key={acc.id} className="hover:bg-slate-50/40">
+                              <td className="p-3 font-semibold text-slate-800">
+                                <div>
+                                  <p className="font-bold">{acc.name}</p>
+                                  <p className="text-[10px] text-slate-500 font-mono">{acc.email}</p>
+                                </div>
+                              </td>
+                              <td className="p-3 text-slate-500 font-mono">{acc.kycRejectedAt ? new Date(acc.kycRejectedAt).toLocaleDateString() : 'N/A'}</td>
+                              <td className="p-3">
+                                {acc.kycEscalationStatus === 'ESCALATED_TO_SUPERVISOR' ? (
+                                  <span className="bg-amber-100 text-amber-800 p-1 px-2 rounded font-bold text-[10px]">Escalated to Supervisor</span>
+                                ) : (
+                                  <span className="text-slate-400">No active appeal</span>
+                                )}
+                              </td>
+                              <td className="p-3">
+                                {acc.kycEscalationStatus !== 'ESCALATED_TO_SUPERVISOR' ? (
+                                  <button
+                                    onClick={() => {
+                                      const reason = prompt(`Enter reason for supervisor exception appeal for ${acc.name}:`, "DinarFlow high-volume corporate partner exception bypass request");
+                                      if (reason) handleRequestKycException(acc.id, reason);
+                                    }}
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold p-1 px-2.5 rounded text-[10px] transition-all"
+                                  >
+                                    Request Bypass Exception
+                                  </button>
+                                ) : (
+                                  <span className="text-slate-400 text-[10px]">Pending Supervisor review</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Sub-section 2: Supervisor approval queue */}
+                <div className="mt-8 space-y-4">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-indigo-600 flex items-center gap-1">
+                    <Shield className="w-3.5 h-3.5 text-indigo-600" /> Step 2: Supervisor Decision Board (Bypass Cooldown Gate)
+                  </h4>
+                  <div className="overflow-x-auto border border-slate-100 rounded-lg">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead className="bg-indigo-50/50 text-slate-500 font-bold uppercase">
+                        <tr>
+                          <th className="p-3">Appealing Citizen</th>
+                          <th className="p-3">Reason / Escalation Notes</th>
+                          <th className="p-3">Decision</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {accounts.filter(a => a.kycEscalationStatus === 'ESCALATED_TO_SUPERVISOR').length === 0 ? (
+                          <tr>
+                            <td colSpan={3} className="p-4 text-center py-8 text-slate-400">No active exception appeals awaiting supervisor review. Escalated reviews appear here.</td>
+                          </tr>
+                        ) : (
+                          accounts.filter(a => a.kycEscalationStatus === 'ESCALATED_TO_SUPERVISOR').map(acc => (
+                            <tr key={acc.id} className="hover:bg-indigo-50/10">
+                              <td className="p-3 font-semibold text-slate-800">{acc.name}</td>
+                              <td className="p-3 text-slate-600 leading-relaxed italic">"{acc.kycEscalationNotes || 'No notes provided.'}"</td>
+                              <td className="p-3">
+                                <button
+                                  onClick={() => handleApproveKycException(acc.id)}
+                                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold p-1 px-3 rounded text-[10px] transition-all shadow-sm shadow-emerald-600/10"
+                                >
+                                  Approve &amp; Clear Cooldown
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
             </div>
           )}
 
@@ -1403,6 +1666,16 @@ export default function App() {
                     }`}
                   >
                     <FileText className="w-4 h-4" /> Signed Contracts Repository (Article 20)
+                  </button>
+                  <button
+                    onClick={() => setAgentsSubTab('SETTLEMENTS')}
+                    className={`px-5 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 ${
+                      agentsSubTab === 'SETTLEMENTS'
+                        ? 'border-indigo-600 text-indigo-600'
+                        : 'border-transparent text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    <DollarSign className="w-4 h-4 text-emerald-600" /> Commission Settlement Directory
                   </button>
                 </div>
 
@@ -1527,7 +1800,7 @@ export default function App() {
                     </div>
 
                   </div>
-                ) : (
+                ) : agentsSubTab === 'REPOSITORY' ? (
                   /* ============================================================= */
                   /* CENTRALIZED REPOSITORY: Signed Contracts (Article 20 Compliance) */
                   /* ============================================================= */
@@ -1645,6 +1918,121 @@ export default function App() {
                       })}
                     </div>
                   </div>
+                ) : (
+                  /* ============================================================= */
+                  /* COMMISSION SETTLEMENT DIRECTORY */
+                  /* ============================================================= */
+                  <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 space-y-6 animate-fadeIn" id="commission_settlements">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                      <div>
+                        <h3 className="font-extrabold text-slate-800 text-base">Agent Commission Payout Directory</h3>
+                        <p className="text-xs text-slate-500 mt-0.5">Under Article 20, commissions are calculated as a percentage of agent transaction volumes. Payouts require supervisor approval before settlement.</p>
+                      </div>
+                    </div>
+
+                    {/* Step 1: Agent side - Request payout */}
+                    <div className="space-y-3">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Step 1: Outlets Accrued Commission &amp; Payout Triggers</h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {agents.map(agent => (
+                          <div key={agent.id} className="border border-slate-100 rounded-xl p-4 bg-slate-50/50 flex items-center justify-between text-xs">
+                            <div>
+                              <p className="font-bold text-slate-800">{agent.name}</p>
+                              <p className="text-[10px] text-slate-500">Accrued Commission: <span className="font-mono font-bold text-slate-700">{(agent.commissionBalance || 0).toLocaleString()} DA</span></p>
+                            </div>
+                            <button
+                              onClick={() => handleRequestCommissionPayout(agent.id)}
+                              disabled={(agent.commissionBalance || 0) <= 0}
+                              className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-bold p-1 px-3 rounded text-[10px] transition-all"
+                            >
+                              Request Payout
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Step 2: Admin/Supervisor side - Approvals and Settlements */}
+                    <div className="space-y-3 pt-4 border-t border-slate-100">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-indigo-600">Step 2: Settlement Requests &amp; Compliance Approvals</h4>
+                      <div className="overflow-x-auto border border-slate-100 rounded-lg">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead className="bg-slate-50 text-slate-500 font-bold uppercase">
+                            <tr>
+                              <th className="p-3">Payout ID</th>
+                              <th className="p-3">Agent</th>
+                              <th className="p-3">Amount</th>
+                              <th className="p-3">Status</th>
+                              <th className="p-3">Approvals</th>
+                              <th className="p-3 text-center">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {commissionSettlements.length === 0 ? (
+                              <tr>
+                                <td colSpan={6} className="p-4 text-center py-8 text-slate-400">No payout requests have been initiated. Accrue commissions by executing agent cash-in/cash-out transactions, then click "Request Payout" above.</td>
+                              </tr>
+                            ) : (
+                              commissionSettlements.map((settlement: any) => {
+                                const agent = agents.find(a => a.id === settlement.agentId);
+                                return (
+                                  <tr key={settlement.id} className="hover:bg-slate-50/50">
+                                    <td className="p-3 font-mono text-[10px] text-slate-500">{settlement.id}</td>
+                                    <td className="p-3 font-bold text-slate-800">{agent?.name || settlement.agentId}</td>
+                                    <td className="p-3 font-mono font-bold text-slate-900">{settlement.amount.toLocaleString()} DA</td>
+                                    <td className="p-3">
+                                      <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase border ${
+                                        settlement.status === 'PAID'
+                                          ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                                          : settlement.status === 'APPROVED'
+                                          ? 'text-indigo-700 bg-indigo-50 border-indigo-200'
+                                          : 'text-amber-700 bg-amber-50 border-amber-200'
+                                      }`}>
+                                        {settlement.status}
+                                      </span>
+                                    </td>
+                                    <td className="p-3 text-slate-600">
+                                      <div>
+                                        <p>Requested: {new Date(settlement.requestedAt).toLocaleDateString()}</p>
+                                        {settlement.approvedAt && <p className="text-[10px] text-emerald-600 font-semibold">Approved by: {settlement.approvedBy}</p>}
+                                        {settlement.paidAt && <p className="text-[10px] text-slate-500 font-mono">Ref: {settlement.paymentReference}</p>}
+                                      </div>
+                                    </td>
+                                    <td className="p-3 text-center">
+                                      <div className="flex gap-1 justify-center">
+                                        {settlement.status === 'PENDING' && (
+                                          <button
+                                            onClick={() => handleApproveCommissionPayout(settlement.id)}
+                                            className="bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold p-1 px-2.5 rounded transition-all"
+                                          >
+                                            Approve Request
+                                          </button>
+                                        )}
+                                        {settlement.status === 'APPROVED' && (
+                                          <button
+                                            onClick={() => {
+                                              const ref = prompt(`Enter payment reference (e.g., Algiers Bank Transfer Ref):`, `FT-DZ-${Date.now().toString().slice(-6)}`);
+                                              if (ref) handlePayCommissionPayout(settlement.id, ref);
+                                            }}
+                                            className="bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold p-1 px-2.5 rounded transition-all"
+                                          >
+                                            Settle Payout (Pay)
+                                          </button>
+                                        )}
+                                        {settlement.status === 'PAID' && (
+                                          <span className="text-slate-400 text-[10px]">Fully Settled</span>
+                                        )}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
                 )}
 
               </div>
@@ -1735,6 +2123,98 @@ export default function App() {
                   </table>
                 </div>
 
+              </div>
+
+              {/* Bank Guarantee Renewal Management Board (Article 34) */}
+              <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h3 className="font-extrabold text-slate-800 text-base">Bank Guarantee Renewal Hub (Article 34 Compliance)</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Bank of Algeria regulations require a valid bank guarantee. If the guarantee expires, outbound transactions are blocked. Initiate renewal procedures here.
+                    </p>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      const amountStr = prompt("Enter bank guarantee renewal amount (DA):", "50000000");
+                      const expiryStr = prompt("Enter new guarantee expiry date (YYYY-MM-DD):", "2027-06-29");
+                      if (amountStr && expiryStr) {
+                        handleRequestGuaranteeRenewal(Number(amountStr), expiryStr);
+                      }
+                    }}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2 rounded-lg flex items-center gap-1.5 transition-all"
+                  >
+                    <Plus className="w-4 h-4" /> Request Guarantee Renewal
+                  </button>
+                </div>
+
+                <div className="overflow-x-auto border border-slate-100 rounded-lg text-xs">
+                  <table className="w-full text-left border-collapse">
+                    <thead className="bg-slate-50 text-slate-500 font-bold uppercase">
+                      <tr>
+                        <th className="p-3">Renewal ID</th>
+                        <th className="p-3">Target Amount</th>
+                        <th className="p-3">New Expiry Date</th>
+                        <th className="p-3">Status</th>
+                        <th className="p-3">Signatures / Proof</th>
+                        <th className="p-3 text-center">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {guaranteeRenewals.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="p-4 text-center text-slate-400 py-8">No bank guarantee renewal requests are currently on file. Click "Request Guarantee Renewal" above to file.</td>
+                        </tr>
+                      ) : (
+                        guaranteeRenewals.map((renewal: any) => (
+                          <tr key={renewal.id} className="hover:bg-slate-50/50">
+                            <td className="p-3 font-mono text-slate-500">{renewal.id}</td>
+                            <td className="p-3 font-bold text-slate-900">{renewal.amount.toLocaleString()} DA</td>
+                            <td className="p-3 font-mono">{renewal.expiryDate}</td>
+                            <td className="p-3">
+                              <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase border ${
+                                renewal.status === 'ISSUED'
+                                  ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                                  : renewal.status === 'APPROVED'
+                                  ? 'text-indigo-700 bg-indigo-50 border-indigo-200 font-bold animate-pulse'
+                                  : 'text-amber-700 bg-amber-50 border-amber-200'
+                              }`}>
+                                {renewal.status}
+                              </span>
+                            </td>
+                            <td className="p-3 text-slate-600 space-y-0.5">
+                              <p>Initiated: {new Date(renewal.requestedAt).toLocaleDateString()}</p>
+                              {renewal.approvedAt && <p className="text-[10px] text-emerald-600 font-semibold">Approved by: {renewal.approvedBy}</p>}
+                            </td>
+                            <td className="p-3 text-center">
+                              <div className="flex gap-1 justify-center">
+                                {renewal.status === 'PENDING' && (
+                                  <button
+                                    onClick={() => handleApproveGuaranteeRenewal(renewal.id)}
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold p-1 px-2.5 rounded text-[10px] transition-all"
+                                  >
+                                    Approve (Bank Officer)
+                                  </button>
+                                )}
+                                {renewal.status === 'APPROVED' && (
+                                  <button
+                                    onClick={() => handleIssueGuaranteeRenewal(renewal.id)}
+                                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold p-1 px-2.5 rounded text-[10px] transition-all shadow-sm shadow-emerald-600/10"
+                                  >
+                                    Issue Renewal
+                                  </button>
+                                )}
+                                {renewal.status === 'ISSUED' && (
+                                  <span className="text-slate-400 text-[10px]">Successfully Issued &amp; Active</span>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
 
             </div>

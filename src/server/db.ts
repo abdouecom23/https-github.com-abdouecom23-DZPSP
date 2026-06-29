@@ -9,7 +9,12 @@ import {
   AuditLog,
   KycLevel,
   KycStatus,
-  TransactionType
+  TransactionType,
+  KycEscalationStatus,
+  CommissionSettlement,
+  GuaranteeRenewalRequest,
+  DeviceFingerprint,
+  RiskScore
 } from '../types';
 
 const DB_FILE = path.join(process.cwd(), 'data', 'db.json');
@@ -23,6 +28,9 @@ interface Schema {
   guarantee: BankGuarantee;
   auditLogs: AuditLog[];
   totpSecrets: { [email: string]: string };
+  commissionSettlements: CommissionSettlement[];
+  guaranteeRenewals: GuaranteeRenewalRequest[];
+  deviceFingerprints: DeviceFingerprint[];
 }
 
 // Generate an Algerian-like IBAN: DZ54 [BankCode 3-digit] [BranchCode 5-digit] [AccountNum 12-digit] [CheckDigit 2-digit]
@@ -193,7 +201,10 @@ const INITIAL_DB: Schema = {
     'sofiane.b@gmail.com': 'JBSWY3DPEHPK3PXP',
     'amine.meziane@outlook.com': 'KVKVE43VNVGHE23M',
     'lydia.ould@gmail.com': 'MZXXE23FNBXGYZJA'
-  }
+  },
+  commissionSettlements: [],
+  guaranteeRenewals: [],
+  deviceFingerprints: []
 };
 
 class JSONDatabase {
@@ -212,6 +223,10 @@ class JSONDatabase {
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
         this.data = JSON.parse(raw);
+        // Ensure new fields are initialized
+        if (!this.data.commissionSettlements) this.data.commissionSettlements = [];
+        if (!this.data.guaranteeRenewals) this.data.guaranteeRenewals = [];
+        if (!this.data.deviceFingerprints) this.data.deviceFingerprints = [];
         // Sync guarantee status on load
         this.updateGuaranteeStatus();
       } else {
@@ -460,6 +475,173 @@ class JSONDatabase {
     return account;
   }
 
+  // --- KYC Escalation & Supervisor Exception Appeals ---
+  public requestKycExceptionBypass(id: string, reason: string) {
+    const account = this.getAccountById(id);
+    if (!account) throw new Error("Account not found");
+    
+    if (!account.kycUpgradeRejected) {
+      throw new Error("Account has no rejection to appeal.");
+    }
+    
+    account.kycEscalationStatus = KycEscalationStatus.ESCALATED_TO_SUPERVISOR;
+    account.kycEscalationNotes = reason;
+    
+    this.logAudit(
+      'KYC_EXCEPTION_REQUEST',
+      `${account.name} requested supervisor review for KYC rejection bypass. Reason: ${reason}`,
+      'WARNING'
+    );
+    this.save();
+    return account;
+  }
+
+  public approveKycExceptionBypass(id: string, supervisorName: string) {
+    const account = this.getAccountById(id);
+    if (!account) throw new Error("Account not found");
+    
+    account.kycUpgradeRejected = false;
+    account.kycRejectedAt = undefined;
+    account.kycEscalationStatus = KycEscalationStatus.NONE;
+    
+    this.logAudit(
+      'KYC_EXCEPTION_APPROVED',
+      `Supervisor ${supervisorName} approved KYC rejection bypass for ${account.name}.`,
+      'WARNING'
+    );
+    this.save();
+    return account;
+  }
+
+  // --- Compliance checking helpers ---
+  private checkAgentComplianceGate(agent: Agent) {
+    if (!agent.contractExpiryDate) return true;
+    const today = new Date().toISOString().split('T')[0];
+    const expiryDate = new Date(agent.contractExpiryDate);
+    const todayDate = new Date(today);
+    
+    const daysUntilExpiry = Math.ceil(
+      (expiryDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24)
+    );
+    
+    if (daysUntilExpiry <= 0) {
+      throw new Error(
+        `AGENT_CONTRACT_EXPIRED: Agent "${agent.name}" contract expired on ${agent.contractExpiryDate}. ` +
+        `No transactions allowed until contract renewal.`
+      );
+    }
+    
+    if (daysUntilExpiry <= 15) {
+      this.logAudit(
+        'AGENT_CONTRACT_EXPIRING_SOON',
+        `Agent "${agent.name}" contract expires in ${daysUntilExpiry} days (${agent.contractExpiryDate}). ` +
+        `Recommend renewal action.`,
+        'WARNING'
+      );
+    }
+    
+    return true;
+  }
+
+  public computeTransactionRiskScore(params: {
+    type: TransactionType;
+    amount: number;
+    sender?: UserAccount;
+    receiver?: UserAccount;
+    hourlyVolumeOfSender?: number;
+  }): RiskScore {
+    let score = 0;
+    const factors: string[] = [];
+    
+    // Factor 1: High single transaction (> 200K DA)
+    if (params.amount > 200000) {
+      score += 25;
+      factors.push("HIGH_SINGLE_AMOUNT");
+    }
+    
+    // Factor 2: Rapid-fire transactions (> 500K in 1 hour)
+    if (params.hourlyVolumeOfSender && params.hourlyVolumeOfSender > 500000) {
+      score += 30;
+      factors.push("RAPID_VOLUME_SPIKE");
+    }
+    
+    // Factor 3: Transfer to new/unverified receiver
+    if (params.receiver && params.receiver.kycLevel === 1) {
+      score += 15;
+      factors.push("LOW_KYC_RECEIVER");
+    }
+    
+    // Factor 4: CASH_OUT (higher risk than transfer)
+    if (params.type === 'CASH_OUT' || params.type === 'AGENT_CASH_OUT') {
+      score += 20;
+      factors.push("CASH_OUT_TRANSACTION");
+    }
+    
+    // Factor 5: Sender is new account (< 7 days)
+    if (params.sender && params.sender.createdAt) {
+      const ageMs = Date.now() - new Date(params.sender.createdAt).getTime();
+      const ageDays = ageMs / (1000 * 60 * 60 * 24);
+      if (ageDays < 7) {
+        score += 20;
+        factors.push("NEW_ACCOUNT_SENDER");
+      }
+    }
+    
+    return {
+      transactionId: `risk-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      score: Math.min(score, 100),
+      factors,
+      flaggedAt: new Date().toISOString(),
+      reviewed: false
+    };
+  }
+
+  private checkGeoAnomalies(
+    accountId: string,
+    currentIp: string,
+    currentLocation: string,
+    deviceId: string
+  ) {
+    const fingerprints = this.data.deviceFingerprints.filter(d => d.accountId === accountId);
+    
+    // Log current device fingerprint
+    const newFingerprint: DeviceFingerprint = {
+      deviceId,
+      lastSeenAt: new Date().toISOString(),
+      lastSeenIp: currentIp,
+      lastSeenLocation: currentLocation,
+      accountId
+    };
+    this.data.deviceFingerprints.push(newFingerprint);
+    
+    if (fingerprints.length === 0) return null; // First transaction, no baseline
+    
+    const lastFingerprint = fingerprints[fingerprints.length - 1];
+    
+    // Simple mock travel anomaly: if location changes and time is very short
+    const timeSinceLastMs = Date.now() - new Date(lastFingerprint.lastSeenAt).getTime();
+    const timeSinceLastSec = timeSinceLastMs / 1000;
+    
+    if (lastFingerprint.lastSeenLocation !== currentLocation && timeSinceLastSec < 3600) {
+      // Different cities/regions within 1 hour is highly suspicious (Impossible travel)
+      return {
+        anomaly: "IMPOSSIBLE_TRAVEL",
+        details: `Impossible travel: Geo-location jump from ${lastFingerprint.lastSeenLocation} to ${currentLocation} in ${Math.round(timeSinceLastSec / 60)} minutes.`,
+        severity: "HIGH" as const
+      };
+    }
+    
+    if (lastFingerprint.lastSeenIp !== currentIp || lastFingerprint.deviceId !== deviceId) {
+      return {
+        anomaly: "NEW_DEVICE_OR_IP",
+        details: `IP/Device changed. Prev: ${lastFingerprint.lastSeenIp} (${lastFingerprint.deviceId}), Curr: ${currentIp} (${deviceId})`,
+        severity: "LOW" as const
+      };
+    }
+    
+    return null;
+  }
+
   // --- Transactions / Double-Entry Ledger Engine ---
   public executeTransaction(params: {
     type: TransactionType;
@@ -507,6 +689,7 @@ class JSONDatabase {
     // 3. SECURE LEDGER CHECKS (Debit Limit, Balance Caps, Cantonnement Check)
 
     // A. DEBIT SUM CHECK & OVERDRAFT SHIELD
+    let hourlyVolume = 0;
     if (senderAcc) {
       // Overdraft shield (Strictly balance >= 0, Article 18)
       const totalDebitRequired = params.amount + fee;
@@ -526,6 +709,12 @@ class JSONDatabase {
       if (senderAcc.dailyDebitSum + params.amount + fee > senderAcc.dailyDebitLimit) {
         throw new Error(`DAILY_LIMIT_EXCEEDED: This transaction of ${params.amount} DA exceeds your Level ${senderAcc.kycLevel} daily limit of ${senderAcc.dailyDebitLimit} DA. Today's debit sum so far: ${senderAcc.dailyDebitSum} DA.`);
       }
+
+      // Calculate hourly volume for risk scoring
+      const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
+      hourlyVolume = this.data.transactions
+        .filter(t => t.timestamp >= oneHourAgo && t.senderIban === senderAcc!.iban)
+        .reduce((sum, t) => sum + t.amount, 0);
     }
 
     // B. RECEIVER BALANCE CAP CHECK (Article 12)
@@ -542,6 +731,9 @@ class JSONDatabase {
       if (!agent) throw new Error("Agent not found.");
       if (!agent.isActive) throw new Error("Agent is suspended or inactive.");
 
+      // Check agent compliance contract gate
+      this.checkAgentComplianceGate(agent);
+
       const pspRegister = agent.cashRegisters['df-psp'] || 0;
 
       if (params.type === 'AGENT_CASH_OUT') {
@@ -551,6 +743,44 @@ class JSONDatabase {
         // User is GIVING cash to agent, user is credited, Agent's PSP register is debited (Agent must have register cash)
         if (pspRegister < params.amount) {
           throw new Error(`AGENT_INSUFFICIENT_LIQUIDITY: Agent register has insufficient cash balance (${pspRegister} DA) to accept this cash deposit of ${params.amount} DA.`);
+        }
+      }
+    }
+
+    // Calculate risk score
+    const riskScore = this.computeTransactionRiskScore({
+      type: params.type,
+      amount: params.amount,
+      sender: senderAcc || undefined,
+      receiver: receiverAcc || undefined,
+      hourlyVolumeOfSender: senderAcc ? hourlyVolume : undefined
+    });
+
+    // Check geo anomaly for the sender account
+    let currentLocation = 'Algiers, Algeria';
+    if (params.ipAddress.startsWith('105.')) {
+      currentLocation = 'Oran, Algeria';
+    } else if (params.ipAddress.startsWith('197.')) {
+      currentLocation = 'Constantine, Algeria';
+    }
+
+    if (senderAcc) {
+      const anomaly = this.checkGeoAnomalies(
+        senderAcc.id,
+        params.ipAddress,
+        currentLocation,
+        params.deviceId
+      );
+      if (anomaly) {
+        this.logAudit(
+          'DEVICE_GEO_ANOMALY',
+          `Suspicious activity on account ${senderAcc.name} (${senderAcc.id}): ${anomaly.details}`,
+          anomaly.severity === 'HIGH' ? 'CRITICAL' : 'WARNING',
+          params.ipAddress
+        );
+        if (anomaly.severity === 'HIGH') {
+          riskScore.score = Math.min(riskScore.score + 40, 100);
+          riskScore.factors.push("IMPOSSIBLE_TRAVEL_ANOMALY");
         }
       }
     }
@@ -594,7 +824,8 @@ class JSONDatabase {
       deviceId: params.deviceId,
       otpVerified: !!params.otpCode,
       agentId: params.agentId,
-      fee
+      fee,
+      riskScore: riskScore
     };
 
     this.data.transactions.unshift(tx);
@@ -602,8 +833,8 @@ class JSONDatabase {
     // Dynamic audit log
     this.logAudit(
       'TRANSACTION_EXECUTED',
-      `Ledger execution [${tx.id}]: ${params.type} of ${params.amount} DA. Sender: ${params.senderIban}, Beneficiary: ${params.receiverIban}. Fee: ${fee} DA.`,
-      params.amount >= 500000 ? 'WARNING' : 'INFO',
+      `Ledger execution [${tx.id}]: ${params.type} of ${params.amount} DA. Sender: ${params.senderIban}, Beneficiary: ${params.receiverIban}. Fee: ${fee} DA. Risk: ${riskScore.score}/100.`,
+      riskScore.score >= 50 ? 'CRITICAL' : params.amount >= 500000 ? 'WARNING' : 'INFO',
       params.ipAddress
     );
 
@@ -771,6 +1002,150 @@ class JSONDatabase {
       'GUARANTEE_UPDATED',
       `Bank Guarantee updated to ${amount} DA. Expiry set to ${expiryDate}. Current status: ${this.data.guarantee.status}`,
       'WARNING'
+    );
+    this.save();
+    return this.data.guarantee;
+  }
+
+  // --- Commission Settlements ---
+  public getCommissionSettlements() {
+    return this.data.commissionSettlements || [];
+  }
+
+  public requestCommissionPayout(agentId: string): CommissionSettlement {
+    const agent = this.data.agents.find(a => a.id === agentId);
+    if (!agent) throw new Error("Agent not found");
+    if (agent.commissionBalance <= 0) {
+      throw new Error("No commissions to settle.");
+    }
+    
+    const settlement: CommissionSettlement = {
+      id: `cs-${Date.now()}`,
+      agentId,
+      amount: agent.commissionBalance,
+      status: 'PENDING',
+      requestedAt: new Date().toISOString()
+    };
+    
+    this.data.commissionSettlements.unshift(settlement);
+    this.logAudit(
+      'COMMISSION_SETTLEMENT_REQUESTED',
+      `Agent ${agent.name} requested settlement of ${agent.commissionBalance} DA.`,
+      'INFO'
+    );
+    this.save();
+    return settlement;
+  }
+
+  public approveCommissionPayout(settlementId: string, approvedBy: string): CommissionSettlement {
+    const settlement = this.data.commissionSettlements.find(s => s.id === settlementId);
+    if (!settlement) throw new Error("Settlement not found");
+    
+    settlement.status = 'APPROVED';
+    settlement.approvedAt = new Date().toISOString();
+    settlement.approvedBy = approvedBy;
+    
+    this.logAudit(
+      'COMMISSION_SETTLEMENT_APPROVED',
+      `${approvedBy} approved commission payout of ${settlement.amount} DA for agent ${settlement.agentId}.`,
+      'INFO'
+    );
+    this.save();
+    return settlement;
+  }
+
+  public markCommissionAsPaid(settlementId: string, paymentRef: string) {
+    const settlement = this.data.commissionSettlements.find(s => s.id === settlementId);
+    if (!settlement) throw new Error("Settlement not found");
+    if (settlement.status !== 'APPROVED') {
+      throw new Error("Settlement must be approved before marking as paid.");
+    }
+    
+    settlement.status = 'PAID';
+    settlement.paidAt = new Date().toISOString();
+    settlement.paymentReference = paymentRef;
+    
+    const agent = this.data.agents.find(a => a.id === settlement.agentId);
+    if (agent) {
+      agent.commissionBalance -= settlement.amount; // Zero out commission
+    }
+    
+    this.logAudit(
+      'COMMISSION_PAID',
+      `Commission payment ${paymentRef} processed for ${settlement.amount} DA. Agent balance reset.`,
+      'INFO'
+    );
+    this.save();
+    return settlement;
+  }
+
+  // --- Guarantee Renewals ---
+  public getGuaranteeRenewals() {
+    return this.data.guaranteeRenewals || [];
+  }
+
+  public requestGuaranteeRenewal(newAmount: number, newExpiryDate: string): GuaranteeRenewalRequest {
+    const renewal: GuaranteeRenewalRequest = {
+      id: `gr-${Date.now()}`,
+      currentGuaranteeId: this.data.guarantee.id,
+      newAmount,
+      newExpiryDate,
+      requestedAt: new Date().toISOString(),
+      status: 'PENDING'
+    };
+    
+    this.data.guaranteeRenewals.unshift(renewal);
+    this.logAudit(
+      'GUARANTEE_RENEWAL_INITIATED',
+      `Guarantee renewal request filed. Current: ${this.data.guarantee.amount} DA (expires ${this.data.guarantee.expiryDate}). ` +
+      `Requested: ${newAmount} DA (new expiry: ${newExpiryDate}).`,
+      'WARNING'
+    );
+    this.save();
+    return renewal;
+  }
+
+  public approveGuaranteeRenewal(renewalId: string, bankOfficer: string) {
+    const renewal = this.data.guaranteeRenewals.find(r => r.id === renewalId);
+    if (!renewal) throw new Error("Renewal request not found");
+    
+    renewal.status = 'APPROVED';
+    renewal.approvedAt = new Date().toISOString();
+    renewal.approvedBy = bankOfficer;
+    
+    this.logAudit(
+      'GUARANTEE_RENEWAL_APPROVED',
+      `Bank officer ${bankOfficer} approved guarantee renewal.`,
+      'WARNING'
+    );
+    this.save();
+    return renewal;
+  }
+
+  public issueGuaranteeRenewal(renewalId: string) {
+    const renewal = this.data.guaranteeRenewals.find(r => r.id === renewalId);
+    if (!renewal) throw new Error("Renewal request not found");
+    if (renewal.status !== 'APPROVED') {
+      throw new Error("Renewal must be approved before issuance.");
+    }
+    
+    // Update the guarantee
+    this.data.guarantee = {
+      ...this.data.guarantee,
+      amount: renewal.newAmount,
+      expiryDate: renewal.newExpiryDate,
+      issueDate: new Date().toISOString().split('T')[0]
+    };
+    
+    renewal.status = 'ISSUED';
+    renewal.issuedAt = new Date().toISOString();
+    
+    this.updateGuaranteeStatus();
+    
+    this.logAudit(
+      'GUARANTEE_RENEWED',
+      `Guarantee successfully renewed: ${renewal.newAmount} DA. New expiry: ${renewal.newExpiryDate}.`,
+      'INFO'
     );
     this.save();
     return this.data.guarantee;
