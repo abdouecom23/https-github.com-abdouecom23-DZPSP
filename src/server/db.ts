@@ -281,7 +281,9 @@ class JSONDatabase {
 
   public save() {
     try {
-      fs.writeFileSync(DB_FILE, JSON.stringify(this.data, null, 2), 'utf-8');
+      const tempFile = `${DB_FILE}.tmp.${Date.now()}`;
+      fs.writeFileSync(tempFile, JSON.stringify(this.data, null, 2), 'utf-8');
+      fs.renameSync(tempFile, DB_FILE);
     } catch (e) {
       console.error("Failed to persist database file", e);
     }
@@ -765,8 +767,15 @@ class JSONDatabase {
     }
 
     // Verify Sender Account Active
-    if ((isTransfer || isCashOut) && senderAcc && senderAcc.kycStatus !== 'ACTIVE') {
-      throw new Error(`ACCOUNT_INACTIVE: Sender account is currently ${senderAcc.kycStatus || 'PENDING'}. KYC validation is required to debit funds.`);
+    if (isTransfer || isCashOut) {
+      if (senderAcc && senderAcc.kycStatus !== 'ACTIVE') {
+        throw new Error(`ACCOUNT_INACTIVE: Sender account is currently ${senderAcc.kycStatus || 'PENDING'}. KYC validation is required to debit funds.`);
+      }
+      if (senderAcc && (senderAcc.status === 'SUSPENDED' || senderAcc.status === 'RELATED_SUSPEND_RISK')) {
+        const errorMsg = `ACCOUNT_SUSPENDED: Sender account is currently suspended (${senderAcc.status}). Transactions are blocked.`;
+        this.trackFailedTransaction(params, errorMsg);
+        throw new Error(errorMsg);
+      }
     }
 
     // Verify Receiver Account Active
@@ -1411,8 +1420,8 @@ class JSONDatabase {
 
   public addBlockedEntity(entityType: 'ACCOUNT' | 'IBAN' | 'IP' | 'DEVICE_ID', entityValue: string, reason: string, blockedBy: string) {
     const cleanValue = entityValue.trim().replace(/\s/g, '');
-    const exists = this.data.blockedEntities.some(b => b.entityType === entityType && b.entityValue.trim().replace(/\s/g, '') === cleanValue && b.status === 'ACTIVE');
-    if (exists) return;
+    const existing = this.data.blockedEntities.find(b => b.entityType === entityType && b.entityValue.trim().replace(/\s/g, '') === cleanValue && b.status === 'ACTIVE');
+    if (existing) return existing;
 
     const blocked: BlockedEntity = {
       id: `blk-${Date.now()}`,

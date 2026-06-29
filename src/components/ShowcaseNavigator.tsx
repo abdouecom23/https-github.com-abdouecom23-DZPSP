@@ -288,7 +288,6 @@ export default function ShowcaseNavigator({
           <div>
             <span className="font-extrabold text-sm tracking-tight text-slate-100 flex items-center gap-1.5">
               DinarFlow Compliance &amp; UX Showcase
-              <span className="text-[9px] font-bold bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded-full border border-indigo-500/20">Mobile &amp; Desktop Interactive Blueprint</span>
             </span>
             <p className="text-[10px] text-slate-400 font-medium">Click tabs to experience the exact user interactions, forms and screens shown in the images</p>
           </div>

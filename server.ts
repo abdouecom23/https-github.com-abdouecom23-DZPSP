@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import cors from 'cors';
@@ -639,15 +640,23 @@ app.get('/api/compliance/stream', (req, res) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive'
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'
   });
+  res.flushHeaders();
 
   sseClients.push(res);
 
   // Send initial ping/connection event
   res.write(`data: ${JSON.stringify({ connected: true, timestamp: new Date().toISOString() })}\n\n`);
 
+  // Send keep-alive pings to prevent idle timeouts
+  const intervalId = setInterval(() => {
+    res.write(`: ping\n\n`);
+  }, 15000);
+
   req.on('close', () => {
+    clearInterval(intervalId);
     sseClients = sseClients.filter(c => c !== res);
   });
 });
