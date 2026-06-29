@@ -153,8 +153,13 @@ export default function ComplianceView({ accounts, transactions, onRefreshAll }:
       setSseStatus('DISCONNECTED');
     };
 
+    const interval = setInterval(() => {
+      fetchComplianceData();
+    }, 5000);
+
     return () => {
       eventSource.close();
+      clearInterval(interval);
     };
   }, []);
 

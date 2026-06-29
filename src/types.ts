@@ -177,6 +177,7 @@ export interface HeldTransaction {
   reviewedBy?: string;
   decision: 'PENDING' | 'APPROVED' | 'REJECTED';
   decisionNotes?: string;
+  holdExpiryTime?: string;
 }
 
 export interface SanctionsCheckResult {
@@ -235,5 +236,14 @@ export interface ComplianceReport {
   suspiciousIndicators?: string[];
   status: 'DRAFT' | 'SUBMITTED' | 'ACKNOWLEDGED';
   targetEntity?: string;
+}
+
+export interface ComplianceDecision {
+  id: string;
+  operator: string;
+  targetTransactionId: string;
+  decision: 'APPROVED' | 'REJECTED';
+  reason: string;
+  decidedAt: string;
 }
 

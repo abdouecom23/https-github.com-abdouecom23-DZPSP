@@ -24,7 +24,8 @@ import {
   MultiSigTransaction,
   FailedTransactionRetry,
   ComplianceReport,
-  FeeBreakdown
+  FeeBreakdown,
+  ComplianceDecision
 } from '../types';
 
 const DB_FILE = path.join(process.cwd(), 'data', 'db.json');
@@ -48,6 +49,7 @@ interface Schema {
   multiSigTransactions: MultiSigTransaction[];
   failedTransactionRetries: FailedTransactionRetry[];
   complianceReports: ComplianceReport[];
+  complianceDecisions: ComplianceDecision[];
 }
 
 // Generate an Algerian-like IBAN: DZ54 [BankCode 3-digit] [BranchCode 5-digit] [AccountNum 12-digit] [CheckDigit 2-digit]
@@ -228,7 +230,8 @@ const INITIAL_DB: Schema = {
   swiftMessages: [],
   multiSigTransactions: [],
   failedTransactionRetries: [],
-  complianceReports: []
+  complianceReports: [],
+  complianceDecisions: []
 };
 
 class JSONDatabase {
@@ -263,6 +266,7 @@ class JSONDatabase {
         if (!this.data.multiSigTransactions) this.data.multiSigTransactions = [];
         if (!this.data.failedTransactionRetries) this.data.failedTransactionRetries = [];
         if (!this.data.complianceReports) this.data.complianceReports = [];
+        if (!this.data.complianceDecisions) this.data.complianceDecisions = [];
         // Sync guarantee status on load
         this.updateGuaranteeStatus();
       } else {
@@ -358,6 +362,8 @@ class JSONDatabase {
     documentUrl?: string;
     idCardBackUrl?: string;
     proofOfAddressUrl?: string;
+    idCardExpiryDate?: string;
+    proofOfAddressExpiryDate?: string;
   }): UserAccount {
     // Check if account already exists (strict single account constraint per user email/phone as per Algerian rules)
     const existingEmail = this.getAccountByEmail(params.email);
@@ -365,6 +371,21 @@ class JSONDatabase {
 
     if (existingEmail || existingPhone) {
       throw new Error("PROHIBITED_DUPLICATE_ACCOUNT: A user is strictly limited to ONE Payment Account under Bank of Algeria regulations.");
+    }
+
+    // Validate Expiry dates if provided (Issue #2)
+    const now = new Date();
+    if (params.idCardExpiryDate) {
+      const expiry = new Date(params.idCardExpiryDate);
+      if (expiry < now) {
+        throw new Error("KYC_DOCUMENT_EXPIRED: ID Card must be valid (not expired) to open account.");
+      }
+    }
+    if (params.proofOfAddressExpiryDate) {
+      const expiry = new Date(params.proofOfAddressExpiryDate);
+      if (expiry < now) {
+        throw new Error("KYC_DOCUMENT_EXPIRED: Proof of address document must be valid (not expired) to open account.");
+      }
     }
 
     const index = this.data.accounts.length + 1;
@@ -398,6 +419,9 @@ class JSONDatabase {
       documentUrl: params.documentUrl,
       idCardBackUrl: params.idCardBackUrl,
       proofOfAddressUrl: params.proofOfAddressUrl,
+      idCardExpiryDate: params.idCardExpiryDate,
+      proofOfAddressExpiryDate: params.proofOfAddressExpiryDate,
+      documentStatusAlert: 'ACTIVE',
       createdAt: new Date().toISOString()
     };
 
@@ -958,7 +982,8 @@ class JSONDatabase {
         riskScore: riskScore.score,
         holdReason: `High Risk score (${riskScore.score}/100): ${riskScore.factors.join(', ')}`,
         heldAt: timestamp,
-        decision: 'PENDING'
+        decision: 'PENDING',
+        holdExpiryTime: new Date(Date.now() + 24 * 3600000).toISOString() // 24 hours expiry TTL
       };
       this.data.heldTransactions.unshift(held);
       this.logAudit('TRANSACTION_HELD_FOR_REVIEW', `Transaction held for manual compliance review. Anomaly factors: ${riskScore.factors.join(', ')}`, 'CRITICAL');
@@ -1510,6 +1535,18 @@ class JSONDatabase {
     held.reviewedBy = reviewer;
     held.decisionNotes = notes;
 
+    // Track compliance decision
+    const complianceDecision: ComplianceDecision = {
+      id: `dec-${Date.now()}`,
+      operator: reviewer,
+      targetTransactionId: held.originalTx.id,
+      decision,
+      reason: notes,
+      decidedAt: new Date().toISOString()
+    };
+    if (!this.data.complianceDecisions) this.data.complianceDecisions = [];
+    this.data.complianceDecisions.unshift(complianceDecision);
+
     if (decision === 'APPROVED') {
       // Execute original transaction but bypassing hold block
       this.logAudit('HELD_TX_APPROVED', `Compliance Operator ${reviewer} approved transaction ${id}. Executing...`, 'INFO');
@@ -1739,6 +1776,102 @@ class JSONDatabase {
     return retry;
   }
 
+  public getComplianceDecisions() {
+    return this.data.complianceDecisions || [];
+  }
+
+  public expireOldHeldTransactions() {
+    const now = new Date();
+    // Default 24h expiration
+    const expired = (this.data.heldTransactions || []).filter(h => 
+      h.decision === 'PENDING' && 
+      new Date(h.holdExpiryTime || new Date(new Date(h.heldAt).getTime() + 24 * 3600000)) < now
+    );
+    if (expired.length === 0) return;
+
+    expired.forEach(h => {
+      h.decision = 'REJECTED';
+      h.reviewedAt = now.toISOString();
+      h.reviewedBy = 'SYSTEM_AUTO_CLEANUP';
+      h.decisionNotes = 'AUTO_EXPIRED: Hold exceeded 24-hour review window.';
+
+      // Track compliance decision
+      const complianceDecision: ComplianceDecision = {
+        id: `dec-${Date.now()}`,
+        operator: 'SYSTEM_AUTO_CLEANUP',
+        targetTransactionId: h.originalTx.id,
+        decision: 'REJECTED',
+        reason: 'AUTO_EXPIRED: Hold exceeded 24-hour review window.',
+        decidedAt: now.toISOString()
+      };
+      if (!this.data.complianceDecisions) this.data.complianceDecisions = [];
+      this.data.complianceDecisions.unshift(complianceDecision);
+
+      this.logAudit('HELD_TX_AUTO_EXPIRED', `Held transaction ${h.id} auto-rejected because it exceeded the 24-hour review window.`, 'WARNING');
+
+      // Save failure record
+      const retry: FailedTransactionRetry = {
+        id: `retry-${Date.now()}`,
+        originalTx: h.originalTx,
+        failureReason: `HELD_AUTO_EXPIRED: Transaction exceeded compliance review window of 24h.`,
+        retryCount: 0,
+        maxRetries: 3,
+        nextRetryAt: now.toISOString(),
+        status: 'ABANDONED'
+      };
+      this.data.failedTransactionRetries.push(retry);
+    });
+
+    this.save();
+  }
+
+  public processPendingRetries() {
+    const pending = this.getFailedTransactionRetries().filter(r => r.status === 'PENDING');
+    if (pending.length === 0) return;
+
+    pending.forEach(retry => {
+      if (new Date(retry.nextRetryAt) < new Date()) {
+        try {
+          this.logAudit('RETRY_PROCESSING', `System attempting automated background retry for transaction fail-record: ${retry.id}...`, 'INFO');
+          
+          // Re-execute transaction
+          const original = retry.originalTx;
+          if (!original.type || !original.amount || !original.senderIban || !original.receiverIban) {
+            throw new Error("INVALID_RETRY_PAYLOAD: Missing core transaction fields in retry record");
+          }
+
+          const result = this.executeTransaction({
+            type: original.type,
+            amount: original.amount,
+            senderIban: original.senderIban,
+            receiverIban: original.receiverIban,
+            reference: original.reference || 'Automated compliance retry',
+            ipAddress: original.ipAddress || '127.0.0.1',
+            deviceId: original.deviceId || 'RETRY_WORKER',
+            agentId: original.agentId
+          });
+
+          retry.status = 'RETRIED';
+          retry.retryCount++;
+          this.logAudit('RETRY_SUCCESS', `Automated retry successful for ${retry.id}. Ledger transaction [${result.id}] executed.`, 'INFO');
+        } catch (e: any) {
+          retry.retryCount++;
+          if (retry.retryCount >= retry.maxRetries) {
+            retry.status = 'ABANDONED';
+            this.logAudit('RETRY_ABANDONED', `Automated retry limit reached (${retry.retryCount}/${retry.maxRetries}) for ${retry.id}. Marked as ABANDONED. Reason: ${e.message}`, 'CRITICAL');
+          } else {
+            // Exponential backoff
+            const delayMs = Math.pow(2, retry.retryCount) * 15000; // 15s, 30s, etc.
+            retry.nextRetryAt = new Date(Date.now() + delayMs).toISOString();
+            this.logAudit('RETRY_FAILED', `Automated retry attempt #${retry.retryCount} failed for ${retry.id}. Next attempt scheduled at ${retry.nextRetryAt}. Reason: ${e.message}`, 'WARNING');
+          }
+        }
+      }
+    });
+
+    this.save();
+  }
+
   // --- Compliance Reports (CTR / SAR to FIU) ---
   public getComplianceReports() {
     return this.data.complianceReports || [];
@@ -1819,7 +1952,7 @@ class JSONDatabase {
     if (!flaggedAcc) return;
 
     const emailDomain = flaggedAcc.email.split('@')[1];
-    const phonePrefix = flaggedAcc.phoneNumber.substring(0, 4);
+    const phonePrefix = flaggedAcc.phoneNumber.substring(0, 7);
 
     // Find related accounts: same email domain (excluding generic like gmail), or same phone prefix
     const isGenericDomain = ['gmail.com', 'outlook.com', 'yahoo.com', 'hotmail.com', 'mail.ru'].includes(emailDomain.toLowerCase());
@@ -1829,7 +1962,7 @@ class JSONDatabase {
       const otherDomain = a.email.split('@')[1];
       
       const domainMatch = !isGenericDomain && otherDomain.toLowerCase() === emailDomain.toLowerCase();
-      const phonePrefixMatch = a.phoneNumber.substring(0, 4) === phonePrefix;
+      const phonePrefixMatch = a.phoneNumber.substring(0, 7) === phonePrefix;
       
       return domainMatch || phonePrefixMatch;
     });
@@ -1851,9 +1984,13 @@ class JSONDatabase {
     const account = this.getAccountById(accountId);
     if (!account) return null;
 
+    const now = Date.now();
+    const oneHourAgo = now - 3600000;
+
     const recentTxs = this.data.transactions
+      .slice(0, 500)
       .filter(t => t.senderIban === account.iban)
-      .filter(t => new Date(t.timestamp) > new Date(Date.now() - 3600000)) // Last hour
+      .filter(t => new Date(t.timestamp).getTime() > oneHourAgo)
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
     // 1. Rapid Fire (> 8 transactions in 1 hour)

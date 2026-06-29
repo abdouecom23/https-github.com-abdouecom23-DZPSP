@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import useDebounce from './hooks/useDebounce';
+import FocusTrap from './components/FocusTrap';
 import {
   LayoutDashboard,
   FileSpreadsheet,
@@ -160,6 +162,8 @@ export default function App() {
   // UI Search filters
   const [accountSearch, setAccountSearch] = useState('');
   const [txSearch, setTxSearch] = useState('');
+  const debouncedAccountSearch = useDebounce(accountSearch, 250);
+  const debouncedTxSearch = useDebounce(txSearch, 250);
 
   // Status Alerts/Notifications
   const [alertMsg, setAlertMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -230,9 +234,24 @@ export default function App() {
   };
 
   useEffect(() => {
+    let id: number | null = null;
+    const tick = () => fetchData(false);
+    const start = () => { if (!id) id = window.setInterval(tick, 3000); };
+    const stop = () => { if (id) { window.clearInterval(id); id = null; } };
+
     fetchData(true); // Show loading spinner on initial mount
-    const interval = setInterval(() => fetchData(false), 3000); // Background poll every 3s
-    return () => clearInterval(interval);
+    start();
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) stop();
+      else { fetchData(false); start(); }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
 
   const showToast = (type: 'success' | 'error', text: string) => {
@@ -709,15 +728,15 @@ export default function App() {
 
   // Filtered lists
   const filteredAccounts = accounts.filter(a => 
-    a.name.toLowerCase().includes(accountSearch.toLowerCase()) || 
-    a.email.toLowerCase().includes(accountSearch.toLowerCase()) ||
-    a.iban.replace(/\s/g, '').includes(accountSearch.replace(/\s/g, ''))
+    a.name.toLowerCase().includes(debouncedAccountSearch.toLowerCase()) || 
+    a.email.toLowerCase().includes(debouncedAccountSearch.toLowerCase()) ||
+    a.iban.replace(/\s/g, '').includes(debouncedAccountSearch.replace(/\s/g, ''))
   );
 
   const filteredTransactions = transactions.filter(t => 
-    t.reference.toLowerCase().includes(txSearch.toLowerCase()) ||
-    t.senderIban.includes(txSearch) ||
-    t.receiverIban.includes(txSearch)
+    t.reference.toLowerCase().includes(debouncedTxSearch.toLowerCase()) ||
+    t.senderIban.includes(debouncedTxSearch) ||
+    t.receiverIban.includes(debouncedTxSearch)
   );
 
   // Get status class for badge
@@ -739,7 +758,7 @@ export default function App() {
   const currentCantonmentRecord = cantonment[0] || null;
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-50 text-slate-800 font-sans" id="app_container">
+    <div className="flex h-full w-full overflow-hidden bg-slate-50 text-slate-800 font-sans" id="app_container">
       
       {/* Dynamic Toast Alert */}
       {alertMsg && (
@@ -788,62 +807,64 @@ export default function App() {
       ) : (
         <>
           {/* Sidebar Layout */}
-          <div className={`${isSidebarOpen ? 'fixed inset-0 z-50' : 'hidden'} md:block md:static md:z-0 w-64`}>
-             <Sidebar 
-                activeTab={activeTab} 
-                setActiveTab={(tab) => {
-                  setActiveTab(tab);
-                  setIsSidebarOpen(false);
-                }}
-                kycPendingCount={accounts.filter(a => a.kycStatus === 'PENDING' || a.kycStatus === 'VISIO_PENDING').length} 
-                showMismatchWarning={currentCantonmentRecord?.status === 'MISMATCH'} 
-                pendingComplianceCount={pendingComplianceCount}
-              />
-              {/* Overlay for mobile */}
-              <div className="md:hidden absolute inset-0 bg-black/50 z-40" onClick={() => setIsSidebarOpen(false)} />
+          <div className={`${isSidebarOpen ? 'fixed inset-0 z-50 flex' : 'hidden'} md:block md:static md:z-0 md:w-64 shrink-0 h-full`}>
+             {/* Overlay for mobile */}
+             <div className="md:hidden fixed inset-0 bg-black/50 -z-10" onClick={() => setIsSidebarOpen(false)} />
+             <div className="relative z-10 h-full w-64 bg-slate-900 shadow-2xl md:shadow-none">
+               <Sidebar 
+                  activeTab={activeTab} 
+                  setActiveTab={(tab) => {
+                    setActiveTab(tab);
+                    setIsSidebarOpen(false);
+                  }}
+                  kycPendingCount={accounts.filter(a => a.kycStatus === 'PENDING' || a.kycStatus === 'VISIO_PENDING').length} 
+                  showMismatchWarning={currentCantonmentRecord?.status === 'MISMATCH'} 
+                  pendingComplianceCount={pendingComplianceCount}
+                />
+             </div>
           </div>
 
           {/* Main View Area */}
           <main className="flex-1 flex flex-col overflow-hidden" id="main_content_area">
         
         {/* Global Operational Header */}
-        <header className="h-16 bg-white border-b border-slate-200 px-4 md:px-8 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-2 md:gap-4">
-             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="md:hidden p-2 text-slate-600">
+        <header className="bg-white border-b border-slate-200 px-4 md:px-8 flex flex-col md:flex-row md:h-16 items-start md:items-center justify-between shrink-0 py-4 md:py-0 gap-4 md:gap-0 z-10">
+          <div className="flex items-center gap-2 md:gap-4 w-full md:w-auto justify-between md:justify-start">
+             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="md:hidden p-2 -ml-2 text-slate-600">
                {isSidebarOpen ? <X /> : <Menu />}
              </button>
-            <h1 className="text-sm md:text-lg font-bold text-slate-800 flex items-center gap-2">
+            <h1 className="text-sm md:text-lg font-bold text-slate-800 flex items-center gap-2 truncate">
               System Status: 
               {guarantee?.status === 'EXPIRED' ? (
-                <span className="text-rose-600 flex items-center gap-1">
-                  <AlertTriangle className="w-4 h-4" /> SUSPENDED (Guarantee Expired)
+                <span className="text-rose-600 flex items-center gap-1 truncate">
+                  <AlertTriangle className="w-4 h-4 shrink-0" /> <span className="hidden sm:inline">SUSPENDED (Guarantee Expired)</span>
                 </span>
               ) : (
-                <span className="text-emerald-600 flex items-center gap-1">
-                  <CheckCircle className="w-4 h-4" /> Operational
+                <span className="text-emerald-600 flex items-center gap-1 truncate">
+                  <CheckCircle className="w-4 h-4 shrink-0" /> <span className="hidden sm:inline">Operational</span>
                 </span>
               )}
             </h1>
           </div>
 
-          <div className="flex items-center gap-6">
+          <div className="flex flex-wrap items-center gap-3 md:gap-6 w-full md:w-auto justify-between md:justify-end">
             <button
               onClick={() => setAppLayoutMode('SHOWCASE')}
-              className="text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white p-2 px-3 rounded-lg flex items-center gap-1.5 transition-all shadow-sm shadow-indigo-600/10"
+              className="text-[10px] md:text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white p-2 md:px-3 rounded-lg flex items-center gap-1.5 transition-all shadow-sm shadow-indigo-600/10"
             >
               <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-              <span>Visual Showcase Mode</span>
+              <span className="hidden sm:inline">Visual Showcase</span>
             </button>
             <button 
               onClick={() => {
                 setAppMode(appMode === 'ADMIN' ? 'USER' : 'ADMIN');
                 if (appMode === 'ADMIN' && accounts.length > 0) setCurrentUser(accounts[0]);
               }} 
-              className="text-xs font-bold bg-slate-200 text-slate-800 p-2 rounded hover:bg-slate-300 transition-all"
+              className="text-[10px] md:text-xs font-bold bg-slate-200 text-slate-800 p-2 rounded hover:bg-slate-300 transition-all"
             >
-              {appMode === 'ADMIN' ? 'SWITCH TO USER VIEW' : 'SWITCH TO ADMIN VIEW'}
+              {appMode === 'ADMIN' ? 'USER VIEW' : 'ADMIN VIEW'}
             </button>
-            <div className="text-right">
+            <div className="text-right hidden xl:block">
               <p className="text-[10px] uppercase font-bold text-slate-400 leading-none">Cantonnement Status</p>
               {currentCantonmentRecord?.status === 'RECONCILED' ? (
                 <p className="text-sm font-bold text-emerald-600">Reconciled (100% Matched)</p>
@@ -852,29 +873,29 @@ export default function App() {
               )}
             </div>
             
-            <div className="h-8 w-px bg-slate-200"></div>
+            <div className="h-8 w-px bg-slate-200 hidden md:block"></div>
 
-            <div className="flex gap-2">
+            <div className="flex gap-2 w-full md:w-auto mt-2 md:mt-0">
               <button 
                 id="btn_new_transaction"
                 onClick={() => setShowTransactionModal(true)}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-1.5 shadow-sm shadow-indigo-600/10 transition-all"
+                className="flex-1 md:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-3 md:px-4 py-2 rounded-lg text-[10px] md:text-sm font-bold flex items-center justify-center gap-1.5 shadow-sm shadow-indigo-600/10 transition-all"
               >
-                <Plus className="w-4 h-4" /> Execute Transaction
+                <Plus className="w-4 h-4 shrink-0" /> Execute Tx
               </button>
               <button 
                 id="btn_iso_export"
                 onClick={triggerISO20022Export}
-                className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-1.5 transition-all"
+                className="flex-1 md:flex-none bg-slate-800 hover:bg-slate-700 text-white px-3 md:px-4 py-2 rounded-lg text-[10px] md:text-sm font-bold flex items-center justify-center gap-1.5 transition-all"
               >
-                <FileText className="w-4 h-4" /> Export ISO 20022
+                <FileText className="w-4 h-4 shrink-0" /> ISO 20022
               </button>
             </div>
           </div>
         </header>
 
         {/* View Router */}
-        <div className="flex-1 overflow-y-auto p-8 space-y-8" id="scrolling_view_container">
+        <div className="flex-1 relative overflow-y-auto p-4 md:p-8 space-y-6 md:space-y-8" id="scrolling_view_container">
           
           {loading && (
             <div className="absolute inset-0 bg-white/80 z-30 flex flex-col items-center justify-center gap-3">
@@ -2304,13 +2325,13 @@ export default function App() {
       {/* MODAL: Open Account Form */}
       {showOpenAccountModal && (
         <div className="fixed inset-0 bg-slate-900/50 z-40 flex items-center justify-center p-4 backdrop-blur-sm" id="open_account_modal">
-          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full border border-slate-200 overflow-hidden flex flex-col">
+          <FocusTrap onClose={() => setShowOpenAccountModal(false)} className="bg-white rounded-xl shadow-2xl max-w-lg w-full border border-slate-200 overflow-hidden flex flex-col">
             <div className="p-6 bg-slate-900 text-white flex items-center justify-between">
               <div>
-                <h3 className="font-extrabold text-base">Register Citizen Payment Account</h3>
+                <h3 className="font-extrabold text-base" id="modal-title">Register Citizen Payment Account</h3>
                 <p className="text-[10px] text-slate-400">Strict Single-Account rule (Bank of Algeria Article 12) verified.</p>
               </div>
-              <button onClick={() => setShowOpenAccountModal(false)} className="text-slate-400 hover:text-white font-bold text-lg">×</button>
+              <button aria-label="Close" onClick={() => setShowOpenAccountModal(false)} className="text-slate-400 hover:text-white font-bold text-lg">×</button>
             </div>
 
             <form onSubmit={handleOpenAccountSubmit} className="p-6 space-y-4 overflow-y-auto max-h-[500px]">
@@ -2530,20 +2551,20 @@ export default function App() {
               </div>
 
             </form>
-          </div>
+          </FocusTrap>
         </div>
       )}
 
       {/* MODAL: Execute Transaction */}
       {showTransactionModal && (
         <div className="fixed inset-0 bg-slate-900/50 z-40 flex items-center justify-center p-4 backdrop-blur-sm" id="transaction_modal">
-          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full border border-slate-200 overflow-hidden flex flex-col">
+          <FocusTrap onClose={() => setShowTransactionModal(false)} className="bg-white rounded-xl shadow-2xl max-w-lg w-full border border-slate-200 overflow-hidden flex flex-col">
             <div className="p-6 bg-slate-900 text-white flex items-center justify-between">
               <div>
-                <h3 className="font-extrabold text-base">Compliance-Proof Sandbox Transaction</h3>
+                <h3 className="font-extrabold text-base" id="modal-title">Compliance-Proof Sandbox Transaction</h3>
                 <p className="text-[10px] text-slate-400">Ledger-level validation check against daily debit limits and tier limits.</p>
               </div>
-              <button onClick={() => setShowTransactionModal(false)} className="text-slate-400 hover:text-white font-bold text-lg">×</button>
+              <button aria-label="Close" onClick={() => setShowTransactionModal(false)} className="text-slate-400 hover:text-white font-bold text-lg">×</button>
             </div>
 
             <form onSubmit={handleTransactionSubmit} className="p-6 space-y-4">
@@ -2687,20 +2708,20 @@ export default function App() {
               </div>
 
             </form>
-          </div>
+          </FocusTrap>
         </div>
       )}
 
       {/* MODAL: Add Agent Mandataire */}
       {showAgentModal && (
         <div className="fixed inset-0 bg-slate-900/50 z-40 flex items-center justify-center p-4 backdrop-blur-sm" id="agent_modal">
-          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full border border-slate-200 overflow-hidden flex flex-col">
+          <FocusTrap onClose={() => setShowAgentModal(false)} className="bg-white rounded-xl shadow-2xl max-w-md w-full border border-slate-200 overflow-hidden flex flex-col">
             <div className="p-6 bg-slate-900 text-white flex items-center justify-between">
               <div>
-                <h3 className="font-extrabold text-base">Onboard Authorized Agent</h3>
+                <h3 className="font-extrabold text-base" id="modal-title">Onboard Authorized Agent</h3>
                 <p className="text-[10px] text-slate-400">Legally separates multi-PSP customer vaults dynamically.</p>
               </div>
-              <button onClick={() => setShowAgentModal(false)} className="text-slate-400 hover:text-white font-bold text-lg">×</button>
+              <button aria-label="Close" onClick={() => setShowAgentModal(false)} className="text-slate-400 hover:text-white font-bold text-lg">×</button>
             </div>
 
             <form onSubmit={handleAgentSubmit} className="p-6 space-y-4">
@@ -2799,7 +2820,7 @@ export default function App() {
               </div>
 
             </form>
-          </div>
+          </FocusTrap>
         </div>
       )}
 

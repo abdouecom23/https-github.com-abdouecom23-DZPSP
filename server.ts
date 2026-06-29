@@ -71,10 +71,19 @@ app.get('/api/accounts/:id', (req, res) => {
 
 app.post('/api/accounts/open', (req, res) => {
   try {
-    const { name, email, phoneNumber, kycLevel, idCardNumber, documentUrl, idCardBackUrl, proofOfAddressUrl } = req.body;
+    const { name, email, phoneNumber, kycLevel, idCardNumber, documentUrl, idCardBackUrl, proofOfAddressUrl, idCardExpiryDate, proofOfAddressExpiryDate } = req.body;
     if (!name || !email || !phoneNumber || !kycLevel) {
       return res.status(400).json({ error: 'Missing required fields: name, email, phoneNumber, kycLevel' });
     }
+
+    // Check sanctions screening BEFORE opening (Issue #5)
+    const sanctions = db.checkSanctionsScreening(name, idCardNumber || '');
+    if (sanctions.sanctioned) {
+      return res.status(403).json({
+        error: `SANCTIONS_BLOCKED: ${sanctions.matchReason}. Account creation denied under Algiers anti-terrorist directives.`
+      });
+    }
+
     const acc = db.openAccount({
       name,
       email,
@@ -83,7 +92,9 @@ app.post('/api/accounts/open', (req, res) => {
       idCardNumber,
       documentUrl,
       idCardBackUrl,
-      proofOfAddressUrl
+      proofOfAddressUrl,
+      idCardExpiryDate,
+      proofOfAddressExpiryDate
     });
     res.status(201).json(acc);
   } catch (error: any) {
@@ -158,6 +169,19 @@ app.post('/api/accounts/:id/kyc-exception-approve', (req, res) => {
 app.get('/api/transactions', (req, res) => {
   try {
     res.json(db.getTransactions());
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/transactions/:id', (req, res) => {
+  try {
+    const tx = db.getTransactions().find(t => t.id === req.params.id);
+    if (!tx) return res.status(404).json({ error: 'Transaction not found' });
+    res.json({
+      ...tx,
+      feeBreakdown: tx.feeBreakdown || { regulatoryFee: 0, operationalFee: 0, profitMargin: 0, total: tx.fee || 0 }
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -709,6 +733,14 @@ app.post('/api/compliance/held/:id/review', (req, res) => {
   }
 });
 
+app.get('/api/compliance/decisions', (req, res) => {
+  try {
+    res.json(db.getComplianceDecisions());
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Multi-Sig Large Transfer dual control list
 app.get('/api/compliance/multisig', (req, res) => {
   try {
@@ -859,6 +891,24 @@ function startReconciliationWorker() {
       console.error("[Reconciliation Worker] Safeguarding reconciliation failed: ", e.message);
     }
   }, 30000); // 30 seconds interval
+
+  // Background automated retry queue runner (checking every 10 seconds)
+  setInterval(() => {
+    try {
+      db.processPendingRetries();
+    } catch (e: any) {
+      console.error("[Retry Worker] Automated transaction retry failed: ", e.message);
+    }
+  }, 10000);
+
+  // Background automated TTL expiration cleaner for compliance holds (checking every 10 seconds)
+  setInterval(() => {
+    try {
+      db.expireOldHeldTransactions();
+    } catch (e: any) {
+      console.error("[Hold Expiry Worker] Old hold auto-cleanup failed: ", e.message);
+    }
+  }, 10000);
 }
 
 startServer();

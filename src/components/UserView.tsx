@@ -542,10 +542,11 @@ export default function UserView({
   return (
     <div className="h-full w-full bg-[#f8fafc] text-slate-800 flex flex-col font-sans overflow-hidden" id="user_portal_root">
       
-      <div className="hidden md:flex flex-1 overflow-hidden relative">
+      <div className="hidden md:flex flex-1 overflow-hidden relative w-full h-full">
         {/* SIDEBAR matches Aurelia/Grey fin-tech style perfectly */}
-        <div className={`${isMobileSidebarOpen ? 'fixed inset-0 z-50 flex' : 'hidden'} md:flex md:static md:z-0 w-64 shrink-0 h-full`}>
-          <aside className="w-64 bg-white border-r border-slate-100 flex flex-col justify-between shrink-0 h-full relative z-50 shadow-lg md:shadow-none" id="user_sidebar">
+        <div className={`${isMobileSidebarOpen ? 'fixed inset-0 z-50 flex' : 'hidden'} md:flex md:static md:z-0 md:w-64 shrink-0 h-full`}>
+          <div className="md:hidden fixed inset-0 bg-slate-900/40 backdrop-blur-sm -z-10" onClick={() => setIsMobileSidebarOpen(false)} />
+          <aside className="w-64 bg-white border-r border-slate-100 flex flex-col justify-between shrink-0 h-full relative z-10 shadow-lg md:shadow-none" id="user_sidebar">
             <div>
               {/* Header / Brand */}
               <div className="p-6 border-b border-slate-50 flex items-center justify-between">
@@ -677,7 +678,7 @@ export default function UserView({
         </div>
 
         {/* MAIN BODY AREA matches image with clean off-white background */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="hidden md:flex flex-1 flex-col overflow-hidden">
           
           {/* HEADER BAR matches image layout with page title, conversions rates, notification, profile switcher */}
           <header className="h-16 bg-white border-b border-slate-100 px-4 md:px-8 flex items-center justify-between shrink-0" id="user_header">
@@ -1766,7 +1767,7 @@ export default function UserView({
         </div>
 
         {/* Floating backdrop-blurred Glass Bottom Navigation Dock exactly like the image */}
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-slate-50 to-transparent pointer-events-none z-40">
+        <div className="md:hidden fixed bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-slate-50 to-transparent pointer-events-none z-40">
           <div className="max-w-md mx-auto bg-white/80 backdrop-blur-md shadow-lg border border-slate-200/50 rounded-full p-2 flex justify-around items-center pointer-events-auto relative">
             
             {/* Nav Item: Home */}
