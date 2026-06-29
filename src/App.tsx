@@ -51,6 +51,7 @@ import {
 import Sidebar from './components/Sidebar';
 import UserView from './components/UserView';
 import ShowcaseNavigator from './components/ShowcaseNavigator';
+import ComplianceView from './components/ComplianceView';
 
 export default function App() {
   // Navigation
@@ -70,6 +71,7 @@ export default function App() {
   const [commissionSettlements, setCommissionSettlements] = useState<any[]>([]);
   const [guaranteeRenewals, setGuaranteeRenewals] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pendingComplianceCount, setPendingComplianceCount] = useState(0);
 
   // Modals & Active Action States
   const [showOpenAccountModal, setShowOpenAccountModal] = useState(false);
@@ -199,6 +201,19 @@ export default function App() {
       setAuditLogs(resAuditLogs);
       setCommissionSettlements(resSettlements || []);
       setGuaranteeRenewals(resRenewals || []);
+
+      // Get pending compliance counts
+      try {
+        const [resHeld, resMsig] = await Promise.all([
+          fetch(`/api/compliance/held?t=${Date.now()}`).then(r => r.json()),
+          fetch(`/api/compliance/multisig?t=${Date.now()}`).then(r => r.json())
+        ]);
+        const heldPending = Array.isArray(resHeld) ? resHeld.filter((h: any) => h.decision === 'PENDING').length : 0;
+        const msigPending = Array.isArray(resMsig) ? resMsig.filter((m: any) => m.status === 'PENDING_APPROVAL').length : 0;
+        setPendingComplianceCount(heldPending + msigPending);
+      } catch (e) {
+        console.error("Failed to fetch compliance alert badge count:", e);
+      }
 
       // Sync active user dashboard balance & stats in real-time
       setCurrentUser(current => {
@@ -782,6 +797,7 @@ export default function App() {
                 }}
                 kycPendingCount={accounts.filter(a => a.kycStatus === 'PENDING' || a.kycStatus === 'VISIO_PENDING').length} 
                 showMismatchWarning={currentCantonmentRecord?.status === 'MISMATCH'} 
+                pendingComplianceCount={pendingComplianceCount}
               />
               {/* Overlay for mobile */}
               <div className="md:hidden absolute inset-0 bg-black/50 z-40" onClick={() => setIsSidebarOpen(false)} />
@@ -2269,6 +2285,14 @@ export default function App() {
               </div>
 
             </div>
+          )}
+
+          {activeTab === 'COMPLIANCE' && (
+            <ComplianceView 
+              accounts={accounts}
+              transactions={transactions}
+              onRefreshAll={() => fetchData(false)}
+            />
           )}
 
         </div>

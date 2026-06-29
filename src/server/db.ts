@@ -14,7 +14,17 @@ import {
   CommissionSettlement,
   GuaranteeRenewalRequest,
   DeviceFingerprint,
-  RiskScore
+  RiskScore,
+  BlockedEntity,
+  TrustedBeneficiary,
+  HeldTransaction,
+  SanctionsCheckResult,
+  SWIFTMessage,
+  ApprovalSignature,
+  MultiSigTransaction,
+  FailedTransactionRetry,
+  ComplianceReport,
+  FeeBreakdown
 } from '../types';
 
 const DB_FILE = path.join(process.cwd(), 'data', 'db.json');
@@ -31,6 +41,13 @@ interface Schema {
   commissionSettlements: CommissionSettlement[];
   guaranteeRenewals: GuaranteeRenewalRequest[];
   deviceFingerprints: DeviceFingerprint[];
+  blockedEntities: BlockedEntity[];
+  trustedBeneficiaries: TrustedBeneficiary[];
+  heldTransactions: HeldTransaction[];
+  swiftMessages: SWIFTMessage[];
+  multiSigTransactions: MultiSigTransaction[];
+  failedTransactionRetries: FailedTransactionRetry[];
+  complianceReports: ComplianceReport[];
 }
 
 // Generate an Algerian-like IBAN: DZ54 [BankCode 3-digit] [BranchCode 5-digit] [AccountNum 12-digit] [CheckDigit 2-digit]
@@ -204,14 +221,26 @@ const INITIAL_DB: Schema = {
   },
   commissionSettlements: [],
   guaranteeRenewals: [],
-  deviceFingerprints: []
+  deviceFingerprints: [],
+  blockedEntities: [],
+  trustedBeneficiaries: [],
+  heldTransactions: [],
+  swiftMessages: [],
+  multiSigTransactions: [],
+  failedTransactionRetries: [],
+  complianceReports: []
 };
 
 class JSONDatabase {
   private data: Schema = INITIAL_DB;
+  private auditListeners: ((log: AuditLog) => void)[] = [];
 
   constructor() {
     this.load();
+  }
+
+  public registerAuditListener(listener: (log: AuditLog) => void) {
+    this.auditListeners.push(listener);
   }
 
   private load() {
@@ -227,6 +256,13 @@ class JSONDatabase {
         if (!this.data.commissionSettlements) this.data.commissionSettlements = [];
         if (!this.data.guaranteeRenewals) this.data.guaranteeRenewals = [];
         if (!this.data.deviceFingerprints) this.data.deviceFingerprints = [];
+        if (!this.data.blockedEntities) this.data.blockedEntities = [];
+        if (!this.data.trustedBeneficiaries) this.data.trustedBeneficiaries = [];
+        if (!this.data.heldTransactions) this.data.heldTransactions = [];
+        if (!this.data.swiftMessages) this.data.swiftMessages = [];
+        if (!this.data.multiSigTransactions) this.data.multiSigTransactions = [];
+        if (!this.data.failedTransactionRetries) this.data.failedTransactionRetries = [];
+        if (!this.data.complianceReports) this.data.complianceReports = [];
         // Sync guarantee status on load
         this.updateGuaranteeStatus();
       } else {
@@ -280,6 +316,15 @@ class JSONDatabase {
       this.data.auditLogs = this.data.auditLogs.slice(0, 200);
     }
     this.save();
+
+    // Trigger SSE audit listeners
+    this.auditListeners.forEach(listener => {
+      try {
+        listener(log);
+      } catch (err) {
+        console.error("Failed to notify SSE listener:", err);
+      }
+    });
   }
 
   // --- Accounts Queries ---
@@ -673,18 +718,73 @@ class JSONDatabase {
     let senderAcc = isTransfer || isCashOut ? this.getAccountByIban(params.senderIban) : null;
     let receiverAcc = isTransfer || isCashIn ? this.getAccountByIban(params.receiverIban) : null;
 
+    // A. CENTRALIZED RISK BLACKLIST CHECK
+    if (this.isEntityBlocked(params.senderIban, 'IBAN') || 
+        this.isEntityBlocked(params.receiverIban, 'IBAN') ||
+        (senderAcc && this.isEntityBlocked(senderAcc.id, 'ACCOUNT')) ||
+        (receiverAcc && this.isEntityBlocked(receiverAcc.id, 'ACCOUNT')) ||
+        this.isEntityBlocked(params.ipAddress, 'IP') ||
+        this.isEntityBlocked(params.deviceId, 'DEVICE_ID')) {
+      const errorMsg = "BLOCKED_ENTITY: Access denied. This account/IBAN/device/IP is blacklisted due to fraud detection compliance.";
+      this.trackFailedTransaction(params, errorMsg);
+      throw new Error(errorMsg);
+    }
+
+    // B. KYC DOCUMENT EXPIRY CHECK
+    if (senderAcc && senderAcc.idCardExpiryDate) {
+      const expiry = new Date(senderAcc.idCardExpiryDate);
+      if (expiry < new Date()) {
+        const errorMsg = `KYC_DOCUMENT_EXPIRED: Your ID Card expired on ${senderAcc.idCardExpiryDate}. Transactions are blocked under Bank of Algeria rules until valid ID is re-uploaded.`;
+        this.trackFailedTransaction(params, errorMsg);
+        throw new Error(errorMsg);
+      }
+    }
+
     // Verify Sender Account Active
     if ((isTransfer || isCashOut) && senderAcc && senderAcc.kycStatus !== 'ACTIVE') {
-      throw new Error(`ACCOUNT_INACTIVE: Sender account is currently ${senderAcc.kycStatus}. KYC validation is required to debit funds.`);
+      throw new Error(`ACCOUNT_INACTIVE: Sender account is currently ${senderAcc.kycStatus || 'PENDING'}. KYC validation is required to debit funds.`);
     }
 
     // Verify Receiver Account Active
     if ((isTransfer || isCashIn) && receiverAcc && receiverAcc.kycStatus !== 'ACTIVE') {
-      throw new Error(`ACCOUNT_INACTIVE: Receiver account is currently ${receiverAcc.kycStatus}. KYC validation is required to credit funds.`);
+      throw new Error(`ACCOUNT_INACTIVE: Receiver account is currently ${receiverAcc.kycStatus || 'PENDING'}. KYC validation is required to credit funds.`);
+    }
+
+    // C. TRUSTED PAYEE WHITELIST LIMIT
+    if (isTransfer && senderAcc) {
+      const cleanReceiverIban = params.receiverIban.trim().replace(/\s/g, '');
+      const isTrusted = this.data.trustedBeneficiaries.some(
+        b => b.accountId === senderAcc!.id && b.beneficiaryIban.trim().replace(/\s/g, '') === cleanReceiverIban
+      );
+      
+      if (!isTrusted) {
+        // Check sum of transfers to non-trusted/new payees by this sender in the last 24 hours
+        const twentyFourHoursAgo = new Date(Date.now() - 24 * 3600000).toISOString();
+        const unverifiedTransfersSum = this.data.transactions
+          .filter(t => t.type === 'TRANSFER' && 
+                       t.senderIban === senderAcc!.iban && 
+                       t.timestamp >= twentyFourHoursAgo &&
+                       !this.data.trustedBeneficiaries.some(b => b.accountId === senderAcc!.id && b.beneficiaryIban.trim().replace(/\s/g, '') === t.receiverIban.trim().replace(/\s/g, '')))
+          .reduce((sum, t) => sum + t.amount, 0);
+
+        if (unverifiedTransfersSum + params.amount > 50000) {
+          const errorMsg = `HIGH_RISK_NEW_PAYEE: Daily volume limit to unverified payees is capped at 50,000 DA. Please add "${params.receiverIban}" to your Trusted Payee Directory first.`;
+          this.trackFailedTransaction(params, errorMsg);
+          throw new Error(errorMsg);
+        }
+      }
     }
 
     // Calculated Fee: 0.5% for transfers, capped at 1000 DA. Agent cash actions have dynamic commission.
     const fee = isTransfer ? Math.min(Math.floor(params.amount * 0.005), 1000) : 0;
+
+    // Detailed Fee Breakdown
+    const feeBreakdown: FeeBreakdown = {
+      regulatoryFee: isTransfer ? Math.min(Math.floor(params.amount * 0.001), 200) : 0, // 0.1% for regulatory compliance
+      operationalFee: isTransfer ? Math.min(Math.floor(params.amount * 0.002), 400) : 0, // 0.2% for core routing/network
+      profitMargin: isTransfer ? Math.min(Math.floor(params.amount * 0.002), 400) : 0, // 0.2% for PSP profit margin
+      total: fee
+    };
 
     // 3. SECURE LEDGER CHECKS (Debit Limit, Balance Caps, Cantonnement Check)
 
@@ -738,7 +838,6 @@ class JSONDatabase {
 
       if (params.type === 'AGENT_CASH_OUT') {
         // Agent is GIVING cash to user, user is debited, Agent's PSP register is credited
-        // Check if agent register + amount exceeds any local limit, usually registers just hold cash
       } else if (params.type === 'AGENT_CASH_IN') {
         // User is GIVING cash to agent, user is credited, Agent's PSP register is debited (Agent must have register cash)
         if (pspRegister < params.amount) {
@@ -755,6 +854,20 @@ class JSONDatabase {
       receiver: receiverAcc || undefined,
       hourlyVolumeOfSender: senderAcc ? hourlyVolume : undefined
     });
+
+    // D. TRANSACTION VELOCITY / ANOMALOUS PATTERN BOOST
+    if (senderAcc) {
+      const patternAlert = this.detectVelocityPatterns(senderAcc.id);
+      if (patternAlert) {
+        riskScore.score = Math.min(riskScore.score + 35, 100);
+        riskScore.factors.push(`VELOCITY_ALERT_${patternAlert.type}`);
+        this.logAudit(
+          'VELOCITY_PATTERN_DETECTED',
+          `Anomalous velocity pattern on account ${senderAcc.name}: ${patternAlert.pattern}`,
+          'WARNING'
+        );
+      }
+    }
 
     // Check geo anomaly for the sender account
     let currentLocation = 'Algiers, Algeria';
@@ -783,6 +896,76 @@ class JSONDatabase {
           riskScore.factors.push("IMPOSSIBLE_TRAVEL_ANOMALY");
         }
       }
+    }
+
+    // E. DUAL-CONTROL MULTI-SIG GATING (> 1M DA)
+    if (params.amount > 1000000 && isTransfer) {
+      const tempTx: LedgerTransaction = {
+        id: `tx-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+        timestamp,
+        type: params.type,
+        amount: params.amount,
+        senderIban: params.senderIban,
+        receiverIban: params.receiverIban,
+        reference: params.reference,
+        ipAddress: params.ipAddress,
+        deviceId: params.deviceId,
+        otpVerified: !!params.otpCode,
+        agentId: params.agentId,
+        fee,
+        riskScore: riskScore,
+        feeBreakdown
+      };
+
+      const multiSig: MultiSigTransaction = {
+        id: `msig-${Date.now()}`,
+        originalTx: tempTx,
+        requiredApprovals: 2,
+        currentApprovals: [],
+        status: 'PENDING_APPROVAL',
+        createdAt: timestamp
+      };
+      this.data.multiSigTransactions.unshift(multiSig);
+      this.logAudit('MULTISIG_QUEUED', `High-Value transfer of ${params.amount} DA queued for dual-control operator signature. ID: ${multiSig.id}`, 'WARNING');
+      
+      const errorMsg = `MULTI_SIG_REQUIRED: Transfers exceeding 1,000,000 DA require dual-control operator authorization. Request has been queued (ID: ${multiSig.id}).`;
+      this.trackFailedTransaction(params, errorMsg);
+      throw new Error(errorMsg);
+    }
+
+    // F. COMPLIANCE REVIEW HOLD GATING (Score >= 75)
+    if (riskScore.score >= 75) {
+      const tempTx: LedgerTransaction = {
+        id: `tx-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+        timestamp,
+        type: params.type,
+        amount: params.amount,
+        senderIban: params.senderIban,
+        receiverIban: params.receiverIban,
+        reference: params.reference,
+        ipAddress: params.ipAddress,
+        deviceId: params.deviceId,
+        otpVerified: !!params.otpCode,
+        agentId: params.agentId,
+        fee,
+        riskScore: riskScore,
+        feeBreakdown
+      };
+
+      const held: HeldTransaction = {
+        id: `hold-${Date.now()}`,
+        originalTx: tempTx,
+        riskScore: riskScore.score,
+        holdReason: `High Risk score (${riskScore.score}/100): ${riskScore.factors.join(', ')}`,
+        heldAt: timestamp,
+        decision: 'PENDING'
+      };
+      this.data.heldTransactions.unshift(held);
+      this.logAudit('TRANSACTION_HELD_FOR_REVIEW', `Transaction held for manual compliance review. Anomaly factors: ${riskScore.factors.join(', ')}`, 'CRITICAL');
+      
+      const errorMsg = `TRANSACTION_HELD: Transaction held for compliance verification due to elevated risk score (${riskScore.score}/100).`;
+      this.trackFailedTransaction(params, errorMsg);
+      throw new Error(errorMsg);
     }
 
     // 4. TRANSACTION MUTATION (Double-Entry Balance Updates)
@@ -825,10 +1008,21 @@ class JSONDatabase {
       otpVerified: !!params.otpCode,
       agentId: params.agentId,
       fee,
-      riskScore: riskScore
+      riskScore: riskScore,
+      feeBreakdown
     };
 
     this.data.transactions.unshift(tx);
+
+    // G. SWIFT MT103 LOGGING FOR INTERBANK TRANSFERS
+    if (isTransfer && senderAcc && receiverAcc) {
+      this.logSwiftMT103(tx);
+    }
+
+    // H. CURRENCY TRANSACTION REPORT (CTR) FOR TRANSFERS >= 10M DA
+    if (params.amount >= 10000000) {
+      this.generateCTRReport(tx);
+    }
 
     // Dynamic audit log
     this.logAudit(
@@ -1183,6 +1377,505 @@ class JSONDatabase {
 
   public getAuditLogs() {
     return this.data.auditLogs;
+  }
+
+  // --- Blocked Entity Registry (Blacklist) ---
+  public getBlockedEntities() {
+    return this.data.blockedEntities || [];
+  }
+
+  public addBlockedEntity(entityType: 'ACCOUNT' | 'IBAN' | 'IP' | 'DEVICE_ID', entityValue: string, reason: string, blockedBy: string) {
+    const cleanValue = entityValue.trim().replace(/\s/g, '');
+    const exists = this.data.blockedEntities.some(b => b.entityType === entityType && b.entityValue.trim().replace(/\s/g, '') === cleanValue && b.status === 'ACTIVE');
+    if (exists) return;
+
+    const blocked: BlockedEntity = {
+      id: `blk-${Date.now()}`,
+      entityType,
+      entityValue,
+      reason,
+      blockedAt: new Date().toISOString(),
+      blockedBy,
+      status: 'ACTIVE'
+    };
+
+    this.data.blockedEntities.unshift(blocked);
+    this.logAudit(
+      'ENTITY_BLOCKED',
+      `Blacklisted ${entityType}: "${entityValue}". Reason: ${reason}. Blocked by: ${blockedBy}`,
+      'CRITICAL'
+    );
+
+    // If account block, suspend account
+    if (entityType === 'ACCOUNT') {
+      const acc = this.getAccountById(entityValue);
+      if (acc) {
+        acc.status = 'SUSPENDED';
+        this.cascadingDeactivationCheck(acc.id);
+      }
+    } else if (entityType === 'IBAN') {
+      const acc = this.getAccountByIban(entityValue);
+      if (acc) {
+        acc.status = 'SUSPENDED';
+        this.cascadingDeactivationCheck(acc.id);
+      }
+    }
+
+    this.save();
+    return blocked;
+  }
+
+  public updateBlockedEntityStatus(id: string, status: 'ACTIVE' | 'APPEAL_PENDING' | 'LIFTED', appealReason?: string) {
+    const entry = this.data.blockedEntities.find(b => b.id === id);
+    if (!entry) throw new Error("Blocked entity entry not found");
+
+    entry.status = status;
+    if (appealReason) entry.appealReason = appealReason;
+
+    this.logAudit(
+      'ENTITY_BLOCK_UPDATED',
+      `Blacklist status for ${entry.entityType} "${entry.entityValue}" updated to ${status}.`,
+      status === 'LIFTED' ? 'INFO' : 'WARNING'
+    );
+
+    // If lifted, restore status
+    if (status === 'LIFTED') {
+      if (entry.entityType === 'ACCOUNT') {
+        const acc = this.getAccountById(entry.entityValue);
+        if (acc) acc.status = 'ACTIVE';
+      } else if (entry.entityType === 'IBAN') {
+        const acc = this.getAccountByIban(entry.entityValue);
+        if (acc) acc.status = 'ACTIVE';
+      }
+    }
+
+    this.save();
+    return entry;
+  }
+
+  public isEntityBlocked(value: string, type: 'ACCOUNT' | 'IBAN' | 'IP' | 'DEVICE_ID'): boolean {
+    const cleanVal = value.trim().replace(/\s/g, '').toLowerCase();
+    return this.data.blockedEntities.some(b => 
+      b.entityType === type && 
+      b.entityValue.trim().replace(/\s/g, '').toLowerCase() === cleanVal && 
+      b.status === 'ACTIVE'
+    );
+  }
+
+  // --- Trusted Beneficiaries Whitelist ---
+  public getTrustedBeneficiaries(accountId: string) {
+    return this.data.trustedBeneficiaries.filter(b => b.accountId === accountId);
+  }
+
+  public addTrustedBeneficiary(accountId: string, beneficiaryIban: string, beneficiaryName: string): TrustedBeneficiary {
+    const account = this.getAccountById(accountId);
+    if (!account) throw new Error("Account not found");
+
+    const cleanIban = beneficiaryIban.trim().replace(/\s/g, '');
+    const exists = this.data.trustedBeneficiaries.find(b => b.accountId === accountId && b.beneficiaryIban.trim().replace(/\s/g, '') === cleanIban);
+    if (exists) return exists;
+
+    const entry: TrustedBeneficiary = {
+      id: `tb-${Date.now()}`,
+      accountId,
+      beneficiaryIban,
+      beneficiaryName,
+      addedAt: new Date().toISOString(),
+      transactionCount: 0,
+      totalAmountSent: 0
+    };
+
+    this.data.trustedBeneficiaries.push(entry);
+    this.logAudit(
+      'BENEFICIARY_ADDED_TO_WHITELIST',
+      `${account.name} added trusted beneficiary ${beneficiaryName} (${beneficiaryIban})`,
+      'INFO'
+    );
+    this.save();
+    return entry;
+  }
+
+  // --- Compliance Holds (Held Transactions) ---
+  public getHeldTransactions() {
+    return this.data.heldTransactions || [];
+  }
+
+  public reviewHeldTransaction(id: string, decision: 'APPROVED' | 'REJECTED', notes: string, reviewer: string) {
+    const held = this.data.heldTransactions.find(h => h.id === id);
+    if (!held) throw new Error("Held transaction not found");
+    if (held.decision !== 'PENDING') throw new Error("Transaction already reviewed");
+
+    held.decision = decision;
+    held.reviewedAt = new Date().toISOString();
+    held.reviewedBy = reviewer;
+    held.decisionNotes = notes;
+
+    if (decision === 'APPROVED') {
+      // Execute original transaction but bypassing hold block
+      this.logAudit('HELD_TX_APPROVED', `Compliance Operator ${reviewer} approved transaction ${id}. Executing...`, 'INFO');
+      
+      // Mutate balances manually to bypass double execution hold error
+      const original = held.originalTx;
+      const senderAcc = this.getAccountByIban(original.senderIban);
+      const receiverAcc = this.getAccountByIban(original.receiverIban);
+
+      if (senderAcc) {
+        senderAcc.balance -= (original.amount + original.fee);
+        senderAcc.dailyDebitSum += (original.amount + original.fee);
+      }
+      if (receiverAcc) {
+        receiverAcc.balance += original.amount;
+      }
+
+      // Record transaction
+      this.data.transactions.unshift(original);
+      
+      this.logAudit(
+        'TRANSACTION_EXECUTED',
+        `Ledger execution [${original.id}] (Hold Approved): ${original.type} of ${original.amount} DA. Sender: ${original.senderIban}, Beneficiary: ${original.receiverIban}.`,
+        'INFO'
+      );
+
+      // SWIFT MT103 logs
+      if (original.type === 'TRANSFER' && senderAcc && receiverAcc) {
+        this.logSwiftMT103(original);
+      }
+
+      // Generate reports if needed
+      if (original.amount >= 10000000) {
+        this.generateCTRReport(original);
+      }
+
+    } else {
+      this.logAudit('HELD_TX_REJECTED', `Compliance Operator ${reviewer} REJECTED transaction ${id}. Releasing hold to failed registry. Reason: ${notes}`, 'CRITICAL');
+      
+      // Save failure record
+      const retry: FailedTransactionRetry = {
+        id: `retry-${Date.now()}`,
+        originalTx: held.originalTx,
+        failureReason: `HELD_REJECTED: Operator rejected transaction during review. Notes: ${notes}`,
+        retryCount: 0,
+        maxRetries: 3,
+        nextRetryAt: new Date().toISOString(),
+        status: 'ABANDONED'
+      };
+      this.data.failedTransactionRetries.push(retry);
+
+      // Trigger automatic warning/blacklisting if operator specified
+      if (notes.toLowerCase().includes('fraud') || notes.toLowerCase().includes('scam')) {
+        this.addBlockedEntity('IBAN', held.originalTx.senderIban, `Fraud reported on held transaction review: ${notes}`, reviewer);
+      }
+    }
+
+    this.save();
+    return held;
+  }
+
+  // --- Sanctions Screening (PEP / OFAC watchlist) ---
+  public checkSanctionsScreening(name: string, idNumber: string): SanctionsCheckResult {
+    const knownTerrorists = [
+      'Mohamed Terroristes', 
+      'Karim Red', 
+      'Al-Zawahiri', 
+      'Mokhtar Belmokhtar', 
+      'Carlos the Jackal', 
+      'Abdelmalek Droukdel',
+      'Ben Laden'
+    ];
+    
+    const isPEP = [
+      'Tebboune', 
+      'Chengriha', 
+      'Brahim Merad', 
+      'Laaziz Faid'
+    ].some(pep => name.toLowerCase().includes(pep.toLowerCase()));
+
+    const matchName = knownTerrorists.find(t => name.toLowerCase().replace(/[\s_-]/g, '').includes(t.toLowerCase().replace(/[\s_-]/g, '')));
+    
+    if (matchName) {
+      return {
+        sanctioned: true,
+        listName: 'ALGERIAN_WATCHLIST',
+        matchReason: `OFAC High-Alert MATCH: "${name}" matches known restricted offender profile "${matchName}" on Global Sanctions Database.`
+      };
+    }
+
+    if (isPEP) {
+      return {
+        sanctioned: true, // For simulator, block or alert PEP registration under high-scrutiny rules
+        listName: 'ALGERIAN_WATCHLIST',
+        matchReason: `PEP MATCH (Politically Exposed Person): "${name}" matches listed high-profile public official. Subject to enhanced regulatory screening.`
+      };
+    }
+
+    return { sanctioned: false, listName: 'OFAC' };
+  }
+
+  // --- SWIFT MT103 Logging ---
+  public getSwiftMessages() {
+    return this.data.swiftMessages || [];
+  }
+
+  private logSwiftMT103(tx: LedgerTransaction) {
+    const swift: SWIFTMessage = {
+      id: `swift-${tx.id}`,
+      messageType: 'MT103',
+      txId: tx.id,
+      senderBIC: 'ALATDZAG001', // Bank of Algeria BIC
+      receiverBIC: 'ALATDZAG002', // Beneficiary PSP clearing BIC
+      amount: tx.amount,
+      currency: 'DZD',
+      description: tx.reference,
+      priority: tx.amount >= 500000 ? 'HIGH' : 'NORM',
+      createdAt: tx.timestamp,
+      status: 'CLEARED'
+    };
+    this.data.swiftMessages.push(swift);
+  }
+
+  // --- Multi-Signature Approval for Large Transfers ---
+  public getMultiSigTransactions() {
+    return this.data.multiSigTransactions || [];
+  }
+
+  public signMultiSigTransaction(id: string, signer: string, status: 'APPROVED' | 'REJECTED', reason: string) {
+    const msig = this.data.multiSigTransactions.find(m => m.id === id);
+    if (!msig) throw new Error("Multi-signature transaction proposal not found");
+    if (msig.status !== 'PENDING_APPROVAL') throw new Error("Proposal is no longer pending approval");
+
+    // Check if signer already signed
+    if (msig.currentApprovals.some(a => a.signerName === signer)) {
+      throw new Error("You have already signed this transaction request.");
+    }
+
+    msig.currentApprovals.push({
+      signerName: signer,
+      signedAt: new Date().toISOString(),
+      approvalStatus: status,
+      reason
+    });
+
+    this.logAudit(
+      'MULTISIG_SIGNED',
+      `Operator ${signer} signed MultiSig TX ${id} with: ${status}. Reason: ${reason}`,
+      'WARNING'
+    );
+
+    if (status === 'REJECTED') {
+      msig.status = 'REJECTED';
+      
+      // Save failure
+      this.data.failedTransactionRetries.push({
+        id: `retry-${Date.now()}`,
+        originalTx: msig.originalTx,
+        failureReason: `MULTISIG_REJECTED: Large value transfer rejected by co-signer ${signer}. Reason: ${reason}`,
+        retryCount: 0,
+        maxRetries: 3,
+        nextRetryAt: new Date().toISOString(),
+        status: 'ABANDONED'
+      });
+    } else {
+      if (msig.currentApprovals.filter(a => a.approvalStatus === 'APPROVED').length >= msig.requiredApprovals) {
+        msig.status = 'APPROVED';
+        
+        // Execute original transaction bypassing multi-sig check
+        this.logAudit('MULTISIG_EXECUTING', `Multi-signature threshold met (2/2). Processing large transfer of ${msig.originalTx.amount} DA...`, 'INFO');
+        
+        const original = msig.originalTx;
+        const senderAcc = this.getAccountByIban(original.senderIban);
+        const receiverAcc = this.getAccountByIban(original.receiverIban);
+
+        if (senderAcc) {
+          senderAcc.balance -= (original.amount + original.fee);
+          senderAcc.dailyDebitSum += (original.amount + original.fee);
+        }
+        if (receiverAcc) {
+          receiverAcc.balance += original.amount;
+        }
+
+        // Record transaction
+        this.data.transactions.unshift(original);
+        msig.status = 'EXECUTED';
+        
+        this.logAudit(
+          'TRANSACTION_EXECUTED',
+          `Ledger execution [${original.id}] (MultiSig Clear): Large transfer of ${original.amount} DA. Sender: ${original.senderIban}, Receiver: ${original.receiverIban}.`,
+          'INFO'
+        );
+
+        // SWIFT MT103 logs
+        if (senderAcc && receiverAcc) {
+          this.logSwiftMT103(original);
+        }
+
+        // Generate reports if needed
+        if (original.amount >= 10000000) {
+          this.generateCTRReport(original);
+        }
+      }
+    }
+
+    this.save();
+    return msig;
+  }
+
+  // --- Failed Transaction Retries ---
+  public getFailedTransactionRetries() {
+    return this.data.failedTransactionRetries || [];
+  }
+
+  public trackFailedTransaction(txDetails: Partial<LedgerTransaction>, errorMsg: string) {
+    const retry: FailedTransactionRetry = {
+      id: `fail-${Date.now()}`,
+      originalTx: txDetails,
+      failureReason: errorMsg,
+      retryCount: 0,
+      maxRetries: 3,
+      nextRetryAt: new Date(Date.now() + 30000).toISOString(),
+      status: 'PENDING'
+    };
+    this.data.failedTransactionRetries.unshift(retry);
+    this.save();
+    return retry;
+  }
+
+  // --- Compliance Reports (CTR / SAR to FIU) ---
+  public getComplianceReports() {
+    return this.data.complianceReports || [];
+  }
+
+  public generateCTRReport(tx: LedgerTransaction) {
+    const report: ComplianceReport = {
+      id: `ctr-${Date.now()}`,
+      reportType: 'CTR',
+      reportDate: new Date().toISOString(),
+      transactions: [tx],
+      totalAmount: tx.amount,
+      targetEntity: tx.senderIban,
+      status: 'DRAFT',
+      suspiciousIndicators: ['High-Value Cash Movement exceeding 10M DA regulatory threshold.']
+    };
+    this.data.complianceReports.unshift(report);
+    this.logAudit(
+      'CTR_GENERATED',
+      `Auto-drafted CTR report ${report.id} for transaction of ${tx.amount} DA. Status: DRAFT.`,
+      'WARNING'
+    );
+    this.save();
+    return report;
+  }
+
+  public generateSARReport(accountId: string, reason: string) {
+    const account = this.getAccountById(accountId);
+    if (!account) throw new Error("Account not found");
+
+    const txs = this.data.transactions.filter(t => t.senderIban === account.iban);
+    const totalAmount = txs.reduce((sum, t) => sum + t.amount, 0);
+
+    const report: ComplianceReport = {
+      id: `sar-${Date.now()}`,
+      reportType: 'SAR',
+      reportDate: new Date().toISOString(),
+      transactions: txs.slice(0, 10), // attach last 10 transactions
+      totalAmount,
+      targetEntity: account.name,
+      status: 'DRAFT',
+      suspiciousIndicators: [
+        'Unusual transactional behavior',
+        'Velocity alert pattern trigger',
+        `Compliance review flag: ${reason}`
+      ]
+    };
+
+    this.data.complianceReports.unshift(report);
+    this.logAudit(
+      'SAR_GENERATED',
+      `Compliance team filed Suspicious Activity Report (SAR) ${report.id} for ${account.name}. Reason: ${reason}`,
+      'CRITICAL'
+    );
+    this.save();
+    return report;
+  }
+
+  public submitReportToFIU(reportId: string) {
+    const report = this.data.complianceReports.find(r => r.id === reportId);
+    if (!report) throw new Error("Report not found");
+
+    report.status = 'SUBMITTED';
+    report.fiuSubmittedAt = new Date().toISOString();
+
+    this.logAudit(
+      'FIU_REPORT_SUBMITTED',
+      `Compliance report ${reportId} (${report.reportType}) has been encrypted and securely transmitted to the Algerian Financial Intelligence Unit (FIU).`,
+      'WARNING'
+    );
+    this.save();
+    return report;
+  }
+
+  // --- Cascading Deactivation ---
+  public cascadingDeactivationCheck(flaggedAccountId: string) {
+    const flaggedAcc = this.getAccountById(flaggedAccountId);
+    if (!flaggedAcc) return;
+
+    const emailDomain = flaggedAcc.email.split('@')[1];
+    const phonePrefix = flaggedAcc.phoneNumber.substring(0, 4);
+
+    // Find related accounts: same email domain (excluding generic like gmail), or same phone prefix
+    const isGenericDomain = ['gmail.com', 'outlook.com', 'yahoo.com', 'hotmail.com', 'mail.ru'].includes(emailDomain.toLowerCase());
+
+    const related = this.data.accounts.filter(a => {
+      if (a.id === flaggedAccountId) return false;
+      const otherDomain = a.email.split('@')[1];
+      
+      const domainMatch = !isGenericDomain && otherDomain.toLowerCase() === emailDomain.toLowerCase();
+      const phonePrefixMatch = a.phoneNumber.substring(0, 4) === phonePrefix;
+      
+      return domainMatch || phonePrefixMatch;
+    });
+
+    related.forEach(acc => {
+      acc.status = 'RELATED_SUSPEND_RISK';
+      this.logAudit(
+        'CASCADING_DEACTIVATION_ALERT',
+        `Account ${acc.name} flagged with RELATED_SUSPEND_RISK. High association with suspended account ${flaggedAcc.name} (Shared properties: ${!isGenericDomain && acc.email.endsWith(emailDomain) ? 'domain: ' + emailDomain : 'phone area: ' + phonePrefix}).`,
+        'WARNING'
+      );
+    });
+
+    this.save();
+  }
+
+  // --- Anomaly Velocity Patterns ---
+  public detectVelocityPatterns(accountId: string): { type: string; pattern: string } | null {
+    const account = this.getAccountById(accountId);
+    if (!account) return null;
+
+    const recentTxs = this.data.transactions
+      .filter(t => t.senderIban === account.iban)
+      .filter(t => new Date(t.timestamp) > new Date(Date.now() - 3600000)) // Last hour
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    // 1. Rapid Fire (> 8 transactions in 1 hour)
+    if (recentTxs.length > 8) {
+      return {
+        type: 'RAPID_FIRE',
+        pattern: `${recentTxs.length} rapid-fire transactions executed within the last hour.`
+      };
+    }
+
+    // 2. Escalating amounts (escalation pattern e.g. 3 consecutive transactions in last hour where each amount is >= 1.5x previous)
+    if (recentTxs.length >= 3) {
+      const amounts = recentTxs.slice(0, 3).map(t => t.amount).reverse(); // oldest to newest
+      if (amounts[1] >= amounts[0] * 1.5 && amounts[2] >= amounts[1] * 1.5) {
+        return {
+          type: 'ESCALATING_PATTERN',
+          pattern: `Escalating volume pattern: suspicious progression [${amounts.join(' DA -> ')} DA] executed in rapid succession.`
+        };
+      }
+    }
+
+    return null;
   }
 
   public getTotpSecret(email: string) {

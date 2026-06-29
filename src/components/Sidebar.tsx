@@ -6,6 +6,7 @@ import {
   Users,
   Scale,
   ShieldCheck,
+  Shield,
 } from 'lucide-react';
 import { NavTab } from '../types';
 
@@ -14,9 +15,10 @@ interface SidebarProps {
   setActiveTab: (tab: NavTab) => void;
   kycPendingCount: number;
   showMismatchWarning: boolean;
+  pendingComplianceCount?: number;
 }
 
-export default function Sidebar({ activeTab, setActiveTab, kycPendingCount, showMismatchWarning }: SidebarProps) {
+export default function Sidebar({ activeTab, setActiveTab, kycPendingCount, showMismatchWarning, pendingComplianceCount }: SidebarProps) {
   return (
     <aside className="w-64 bg-slate-900 text-slate-100 flex flex-col justify-between shrink-0" id="sidebar_nav">
       <div>
@@ -81,6 +83,15 @@ export default function Sidebar({ activeTab, setActiveTab, kycPendingCount, show
             onClick={() => setActiveTab('AUDITS')}
             icon={<ShieldCheck className="w-4.5 h-4.5" />}
             label="Audit Logs"
+          />
+
+          <SidebarButton
+            id="tab_compliance"
+            active={activeTab === 'COMPLIANCE'}
+            onClick={() => setActiveTab('COMPLIANCE')}
+            icon={<Shield className="w-4.5 h-4.5 text-rose-400" />}
+            label="Compliance Center"
+            badge={pendingComplianceCount && pendingComplianceCount > 0 ? pendingComplianceCount : undefined}
           />
         </nav>
       </div>

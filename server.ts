@@ -597,6 +597,221 @@ app.post('/api/kyc/ocr', async (req, res) => {
 });
 
 // ==========================================
+// REAL-TIME SSE COMPLIANCE STREAM
+// ==========================================
+let sseClients: express.Response[] = [];
+
+db.registerAuditListener((log) => {
+  sseClients.forEach(client => {
+    try {
+      client.write(`data: ${JSON.stringify(log)}\n\n`);
+    } catch (err) {
+      console.error("SSE client write failed, removing client", err);
+    }
+  });
+});
+
+app.get('/api/compliance/stream', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive'
+  });
+
+  sseClients.push(res);
+
+  // Send initial ping/connection event
+  res.write(`data: ${JSON.stringify({ connected: true, timestamp: new Date().toISOString() })}\n\n`);
+
+  req.on('close', () => {
+    sseClients = sseClients.filter(c => c !== res);
+  });
+});
+
+// ==========================================
+// COMPLIANCE ROUTING MODULES
+// ==========================================
+
+// Blacklist (Blocked Entities)
+app.get('/api/compliance/blocked', (req, res) => {
+  try {
+    res.json(db.getBlockedEntities());
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/compliance/blocked', (req, res) => {
+  try {
+    const { entityType, entityValue, reason, blockedBy } = req.body;
+    if (!entityType || !entityValue || !reason) {
+      return res.status(400).json({ error: 'Missing required fields: entityType, entityValue, reason' });
+    }
+    const blocked = db.addBlockedEntity(entityType, entityValue, reason, blockedBy || 'System Administrator');
+    res.status(201).json(blocked);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/compliance/blocked/:id/status', (req, res) => {
+  try {
+    const { status, appealReason } = req.body;
+    if (!status) return res.status(400).json({ error: 'Missing status' });
+    const updated = db.updateBlockedEntityStatus(req.params.id, status, appealReason);
+    res.json(updated);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Whitelist (Trusted Beneficiaries)
+app.get('/api/compliance/trusted/:accountId', (req, res) => {
+  try {
+    res.json(db.getTrustedBeneficiaries(req.params.accountId));
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/compliance/trusted', (req, res) => {
+  try {
+    const { accountId, beneficiaryIban, beneficiaryName } = req.body;
+    if (!accountId || !beneficiaryIban || !beneficiaryName) {
+      return res.status(400).json({ error: 'Missing accountId, beneficiaryIban, or beneficiaryName' });
+    }
+    const tb = db.addTrustedBeneficiary(accountId, beneficiaryIban, beneficiaryName);
+    res.status(201).json(tb);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Held Transactions (Manual compliance review queue)
+app.get('/api/compliance/held', (req, res) => {
+  try {
+    res.json(db.getHeldTransactions());
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/compliance/held/:id/review', (req, res) => {
+  try {
+    const { decision, notes, reviewer } = req.body;
+    if (!decision || !notes) {
+      return res.status(400).json({ error: 'Missing decision (APPROVED | REJECTED) or review notes' });
+    }
+    const reviewed = db.reviewHeldTransaction(req.params.id, decision, notes, reviewer || 'Compliance Agent');
+    res.json(reviewed);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Multi-Sig Large Transfer dual control list
+app.get('/api/compliance/multisig', (req, res) => {
+  try {
+    res.json(db.getMultiSigTransactions());
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/compliance/multisig/:id/sign', (req, res) => {
+  try {
+    const { signerName, status, reason } = req.body;
+    if (!signerName || !status) {
+      return res.status(400).json({ error: 'Missing signerName or status (APPROVED | REJECTED)' });
+    }
+    const msig = db.signMultiSigTransaction(req.params.id, signerName, status, reason || '');
+    res.json(msig);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Failed Retries Registry
+app.get('/api/compliance/retries', (req, res) => {
+  try {
+    res.json(db.getFailedTransactionRetries());
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Compliance CTR / SAR Reports
+app.get('/api/compliance/reports', (req, res) => {
+  try {
+    res.json(db.getComplianceReports());
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/compliance/reports/sar', (req, res) => {
+  try {
+    const { accountId, reason } = req.body;
+    if (!accountId || !reason) {
+      return res.status(400).json({ error: 'Missing accountId or SAR filed reason' });
+    }
+    const report = db.generateSARReport(accountId, reason);
+    res.status(201).json(report);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/compliance/reports/:id/submit', (req, res) => {
+  try {
+    const report = db.submitReportToFIU(req.params.id);
+    res.json(report);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// SWIFT Clearing Ledger (MT103)
+app.get('/api/compliance/swift', (req, res) => {
+  try {
+    res.json(db.getSwiftMessages());
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Sanctions Screening check api
+app.post('/api/compliance/sanctions-check', (req, res) => {
+  try {
+    const { name, idNumber } = req.body;
+    if (!name) return res.status(400).json({ error: 'Name is required for sanctions check' });
+    const result = db.checkSanctionsScreening(name, idNumber || '');
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update Document Expiry and Status Alert simulation
+app.post('/api/accounts/:id/update-expiry', (req, res) => {
+  try {
+    const { idCardExpiryDate, proofOfAddressExpiryDate, documentStatusAlert } = req.body;
+    const account = db.getAccountById(req.params.id);
+    if (!account) return res.status(404).json({ error: 'Account not found' });
+    
+    if (idCardExpiryDate) account.idCardExpiryDate = idCardExpiryDate;
+    if (proofOfAddressExpiryDate) account.proofOfAddressExpiryDate = proofOfAddressExpiryDate;
+    if (documentStatusAlert) account.documentStatusAlert = documentStatusAlert;
+    
+    db.save();
+    db.logAudit('KYC_DOCUMENT_UPDATED', `Documents for citizen ${account.name} updated. Expiry: ${idCardExpiryDate || 'n/a'}. Alert Level: ${documentStatusAlert || 'n/a'}.`, 'INFO');
+    res.json(account);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// ==========================================
 // VITE OR STATIC STATIC DELIVERY
 // ==========================================
 
