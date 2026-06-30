@@ -36,6 +36,7 @@ import {
   AuditLog,
   KycStatus
 } from '../types';
+import { ApiService } from '../apiService';
 
 interface ComplianceViewProps {
   accounts: UserAccount[];
@@ -97,20 +98,20 @@ export default function ComplianceView({ accounts, transactions, onRefreshAll }:
   const fetchComplianceData = async () => {
     try {
       const [resBlk, resHeld, resMsig, resRetries, resRep, resSwift] = await Promise.all([
-        fetch('/api/compliance/blocked'),
-        fetch('/api/compliance/held'),
-        fetch('/api/compliance/multisig'),
-        fetch('/api/compliance/retries'),
-        fetch('/api/compliance/reports'),
-        fetch('/api/compliance/swift')
+        ApiService.getBlockedCompliance(),
+        ApiService.getHeldCompliance(),
+        ApiService.getMultisigCompliance(),
+        ApiService.getComplianceRetries(),
+        ApiService.getComplianceReports(),
+        ApiService.getSwiftCompliance()
       ]);
 
-      if (resBlk.ok) setBlockedEntities(await resBlk.json());
-      if (resHeld.ok) setHeldTransactions(await resHeld.json());
-      if (resMsig.ok) setMultiSigTransactions(await resMsig.json());
-      if (resRetries.ok) setFailedRetries(await resRetries.json());
-      if (resRep.ok) setComplianceReports(await resRep.json());
-      if (resSwift.ok) setSwiftMessages(await resSwift.json());
+      setBlockedEntities(resBlk);
+      setHeldTransactions(resHeld);
+      setMultiSigTransactions(resMsig);
+      setFailedRetries(resRetries);
+      setComplianceReports(resRep);
+      setSwiftMessages(resSwift);
     } catch (e) {
       console.error("Error fetching compliance data", e);
     }
@@ -169,25 +170,16 @@ export default function ComplianceView({ accounts, transactions, onRefreshAll }:
     if (!blackListForm.entityValue || !blackListForm.reason) return;
 
     try {
-      const res = await fetch('/api/compliance/blocked', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(blackListForm)
+      await ApiService.createBlockedCompliance(blackListForm);
+      setBlackListForm({
+        entityType: 'ACCOUNT',
+        entityValue: '',
+        reason: '',
+        blockedBy: 'H. Brahimi'
       });
-      if (res.ok) {
-        setBlackListForm({
-          entityType: 'ACCOUNT',
-          entityValue: '',
-          reason: '',
-          blockedBy: 'H. Brahimi'
-        });
-        fetchComplianceData();
-        onRefreshAll();
-        alert("Entity added to fraud blacklist successfully!");
-      } else {
-        const err = await res.json();
-        alert(`Failed to block entity: ${err.error}`);
-      }
+      fetchComplianceData();
+      onRefreshAll();
+      alert("Entity added to fraud blacklist successfully!");
     } catch (err: any) {
       alert(err.message);
     }
@@ -195,18 +187,9 @@ export default function ComplianceView({ accounts, transactions, onRefreshAll }:
 
   const handleUpdateBlacklistStatus = async (id: string, status: 'ACTIVE' | 'APPEAL_PENDING' | 'LIFTED', appealReason?: string) => {
     try {
-      const res = await fetch(`/api/compliance/blocked/${id}/status`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, appealReason })
-      });
-      if (res.ok) {
-        fetchComplianceData();
-        onRefreshAll();
-      } else {
-        const err = await res.json();
-        alert(err.error);
-      }
+      await ApiService.updateBlockedComplianceStatus(id, { status: status as any, reason: appealReason });
+      fetchComplianceData();
+      onRefreshAll();
     } catch (err: any) {
       alert(err.message);
     }
@@ -217,19 +200,10 @@ export default function ComplianceView({ accounts, transactions, onRefreshAll }:
     if (!whitelistForm.accountId || !whitelistForm.beneficiaryIban || !whitelistForm.beneficiaryName) return;
 
     try {
-      const res = await fetch('/api/compliance/trusted', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(whitelistForm)
-      });
-      if (res.ok) {
-        setWhitelistForm({ accountId: '', beneficiaryIban: '', beneficiaryName: '' });
-        alert("Trusted beneficiary payee registered in white-directory!");
-        fetchComplianceData();
-      } else {
-        const err = await res.json();
-        alert(err.error);
-      }
+      await ApiService.createTrustedAccountCompliance(whitelistForm);
+      setWhitelistForm({ accountId: '', beneficiaryIban: '', beneficiaryName: '' });
+      alert("Trusted beneficiary payee registered in white-directory!");
+      fetchComplianceData();
     } catch (err: any) {
       alert(err.message);
     }
@@ -242,25 +216,16 @@ export default function ComplianceView({ accounts, transactions, onRefreshAll }:
     }
 
     try {
-      const res = await fetch(`/api/compliance/held/${holdId}/review`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          decision,
-          notes: operatorReviewNotes,
-          reviewer: 'H. Brahimi'
-        })
+      await ApiService.reviewHeldCompliance(holdId, {
+        decision,
+        notes: operatorReviewNotes,
+        reviewer: 'H. Brahimi'
       });
 
-      if (res.ok) {
-        setOperatorReviewNotes('');
-        alert(`Held transaction ${decision} successfully!`);
-        fetchComplianceData();
-        onRefreshAll();
-      } else {
-        const err = await res.json();
-        alert(err.error);
-      }
+      setOperatorReviewNotes('');
+      alert(`Held transaction ${decision} successfully!`);
+      fetchComplianceData();
+      onRefreshAll();
     } catch (err: any) {
       alert(err.message);
     }
@@ -268,25 +233,16 @@ export default function ComplianceView({ accounts, transactions, onRefreshAll }:
 
   const handleSignMultiSig = async (msigId: string, decision: 'APPROVED' | 'REJECTED', signer: string) => {
     try {
-      const res = await fetch(`/api/compliance/multisig/${msigId}/sign`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          signerName: signer,
-          status: decision,
-          reason: multiSigSignNotes || "Dual-control compliance confirmation"
-        })
+      await ApiService.signMultisigCompliance(msigId, {
+        signerName: signer,
+        status: decision,
+        reason: multiSigSignNotes || "Dual-control compliance confirmation"
       });
 
-      if (res.ok) {
-        setMultiSigSignNotes('');
-        alert(`Signed MultiSig proposal as ${signer} with decision: ${decision}!`);
-        fetchComplianceData();
-        onRefreshAll();
-      } else {
-        const err = await res.json();
-        alert(err.error);
-      }
+      setMultiSigSignNotes('');
+      alert(`Signed MultiSig proposal as ${signer} with decision: ${decision}!`);
+      fetchComplianceData();
+      onRefreshAll();
     } catch (err: any) {
       alert(err.message);
     }
@@ -297,19 +253,10 @@ export default function ComplianceView({ accounts, transactions, onRefreshAll }:
     if (!sarForm.accountId || !sarForm.reason) return;
 
     try {
-      const res = await fetch('/api/compliance/reports/sar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(sarForm)
-      });
-      if (res.ok) {
-        setSarForm({ accountId: '', reason: '' });
-        alert("Suspicious Activity Report (SAR) successfully created as DRAFT!");
-        fetchComplianceData();
-      } else {
-        const err = await res.json();
-        alert(err.error);
-      }
+      await ApiService.createSarReport(sarForm);
+      setSarForm({ accountId: '', reason: '' });
+      alert("Suspicious Activity Report (SAR) successfully created as DRAFT!");
+      fetchComplianceData();
     } catch (err: any) {
       alert(err.message);
     }
@@ -317,16 +264,9 @@ export default function ComplianceView({ accounts, transactions, onRefreshAll }:
 
   const handleSubmitReport = async (reportId: string) => {
     try {
-      const res = await fetch(`/api/compliance/reports/${reportId}/submit`, {
-        method: 'POST'
-      });
-      if (res.ok) {
-        alert("Report successfully filed and transmitted to the Financial Intelligence Unit (FIU) of Bank of Algeria!");
-        fetchComplianceData();
-      } else {
-        const err = await res.json();
-        alert(err.error);
-      }
+      await ApiService.submitSarReport(reportId);
+      alert("Report successfully filed and transmitted to the Financial Intelligence Unit (FIU) of Bank of Algeria!");
+      fetchComplianceData();
     } catch (err: any) {
       alert(err.message);
     }
@@ -337,18 +277,8 @@ export default function ComplianceView({ accounts, transactions, onRefreshAll }:
     if (!sanctionsSearch) return;
 
     try {
-      const res = await fetch('/api/compliance/sanctions-check', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: sanctionsSearch })
-      });
-      if (res.ok) {
-        const result = await res.json();
-        setSanctionsResult(result);
-      } else {
-        const err = await res.json();
-        alert(err.error);
-      }
+      const result = await ApiService.checkSanctions({ name: sanctionsSearch });
+      setSanctionsResult(result);
     } catch (err: any) {
       alert(err.message);
     }
@@ -359,25 +289,16 @@ export default function ComplianceView({ accounts, transactions, onRefreshAll }:
     if (!expiryForm.accountId) return;
 
     try {
-      const res = await fetch(`/api/accounts/${expiryForm.accountId}/update-expiry`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          idCardExpiryDate: expiryForm.idCardExpiryDate,
-          proofOfAddressExpiryDate: expiryForm.proofOfAddressExpiryDate,
-          documentStatusAlert: expiryForm.documentStatusAlert
-        })
+      await ApiService.updateAccountExpiry(expiryForm.accountId, {
+        idCardExpiryDate: expiryForm.idCardExpiryDate,
+        proofOfAddressExpiryDate: expiryForm.proofOfAddressExpiryDate,
+        documentStatusAlert: expiryForm.documentStatusAlert
       });
 
-      if (res.ok) {
-        alert("Account Document Expiry Simulated successfully! Document status alert triggered.");
-        setExpiryForm({ accountId: '', idCardExpiryDate: '', proofOfAddressExpiryDate: '', documentStatusAlert: 'ACTIVE' });
-        fetchComplianceData();
-        onRefreshAll();
-      } else {
-        const err = await res.json();
-        alert(err.error);
-      }
+      alert("Account Document Expiry Simulated successfully! Document status alert triggered.");
+      setExpiryForm({ accountId: '', idCardExpiryDate: '', proofOfAddressExpiryDate: '', documentStatusAlert: 'ACTIVE' });
+      fetchComplianceData();
+      onRefreshAll();
     } catch (err: any) {
       alert(err.message);
     }
@@ -1530,8 +1451,7 @@ function TrustedList({ accountId }: { accountId: string }) {
   const [list, setList] = useState<TrustedBeneficiary[]>([]);
   
   useEffect(() => {
-    fetch(`/api/compliance/trusted/${accountId}`)
-      .then(r => r.json())
+    ApiService.getTrustedAccountCompliance(accountId)
       .then(data => setList(data))
       .catch(err => console.error("Whitelist sub-fetch error", err));
   }, [accountId]);

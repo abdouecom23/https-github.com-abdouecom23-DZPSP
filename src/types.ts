@@ -1,6 +1,6 @@
 export type KycLevel = 1 | 2 | 3;
 export type KycStatus = 'PENDING' | 'ACTIVE' | 'REJECTED' | 'VISIO_PENDING';
-export type NavTab = 'DASHBOARD' | 'LEDGER' | 'KYC' | 'AGENTS' | 'RECONCILIATION' | 'AUDITS' | 'COMPLIANCE';
+export type NavTab = 'DASHBOARD' | 'LEDGER' | 'KYC' | 'AGENTS' | 'RECONCILIATION' | 'AUDITS' | 'COMPLIANCE' | 'PERFORMANCE';
 
 export enum KycEscalationStatus {
   NONE = 'NONE',

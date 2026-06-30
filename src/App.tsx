@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect } from 'react';
 import useDebounce from './hooks/useDebounce';
 import FocusTrap from './components/FocusTrap';
+import { useAppStore } from './store';
+import { ApiService } from './apiService';
 import {
   LayoutDashboard,
   FileSpreadsheet,
@@ -55,184 +57,59 @@ import UserView from './components/UserView';
 import ComplianceView from './components/ComplianceView';
 import LedgerTab from './components/LedgerTab';
 import AuditsTab from './components/AuditsTab';
+import PerformanceView from './components/PerformanceView';
 import { ApiClient } from './apiClient';
 
 export default function App() {
-  // Navigation
-  const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'LEDGER' | 'KYC' | 'AGENTS' | 'RECONCILIATION' | 'AUDITS'>('DASHBOARD');
-  const [appMode, setAppMode] = useState<'ADMIN' | 'USER'>('ADMIN');
-  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
+  const {
+    activeTab, setActiveTab,
+    appMode, setAppMode,
+    currentUser, setCurrentUser,
+    stats, setStats,
+    accounts, setAccounts,
+    transactions, setTransactions,
+    agents, setAgents,
+    cantonment, setCantonment,
+    guarantee, setGuarantee,
+    auditLogs, setAuditLogs,
+    commissionSettlements, setCommissionSettlements,
+    guaranteeRenewals, setGuaranteeRenewals,
+    loading, setLoading,
+    pendingComplianceCount, setPendingComplianceCount,
+    showOpenAccountModal, setShowOpenAccountModal,
+    showTransactionModal, setShowTransactionModal,
+    showAgentModal, setShowAgentModal,
+    showGuaranteeModal, setShowGuaranteeModal,
+    showReconciliationModal, setShowReconciliationModal,
+    selectedKycAccount, setSelectedKycAccount,
+    showVisioModal, setShowVisioModal,
+    visioStep, setVisioStep,
+    visioComments, setVisioComments,
+    citizenHoldingCard, setCitizenHoldingCard,
+    newAccForm, setNewAccForm,
+    isSidebarOpen, setIsSidebarOpen,
+    agentsSubTab, setAgentsSubTab,
+    txForm, setTxForm,
+    agentForm, setAgentForm,
+    selectedAgentForContract, setSelectedAgentForContract,
+    showContractEditModal, setShowContractEditModal,
+    contractEditForm, setContractEditForm,
+    guaranteeForm, setGuaranteeForm,
+    reconcileForm, setReconcileForm,
+    userOtpSecret, setUserOtpSecret,
+    otpSentMessage, setOtpSentMessage,
+    ocrScanning, setOcrScanning,
+    ocrResult, setOcrResult,
+    ocrDocumentType, setOcrDocumentType,
+    accountSearch, setAccountSearch,
+    txSearch, setTxSearch,
+    alertMsg, setAlertMsg,
+    showToast,
+    fetchData
+  } = useAppStore();
 
-  // Backend state
-  const [stats, setStats] = useState<any>(null);
-  const [accounts, setAccounts] = useState<UserAccount[]>([]);
-  const [transactions, setTransactions] = useState<LedgerTransaction[]>([]);
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [cantonment, setCantonment] = useState<CantonmentRecord[]>([]);
-  const [guarantee, setGuarantee] = useState<BankGuarantee | null>(null);
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
-  const [commissionSettlements, setCommissionSettlements] = useState<any[]>([]);
-  const [guaranteeRenewals, setGuaranteeRenewals] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [pendingComplianceCount, setPendingComplianceCount] = useState(0);
-
-  // Modals & Active Action States
-  const [showOpenAccountModal, setShowOpenAccountModal] = useState(false);
-  const [showTransactionModal, setShowTransactionModal] = useState(false);
-  const [showAgentModal, setShowAgentModal] = useState(false);
-  const [showGuaranteeModal, setShowGuaranteeModal] = useState(false);
-  const [showReconciliationModal, setShowReconciliationModal] = useState(false);
-
-  // KYC Selection for Video Interview & Document Review
-  const [selectedKycAccount, setSelectedKycAccount] = useState<UserAccount | null>(null);
-  const [showVisioModal, setShowVisioModal] = useState(false);
-  const [visioStep, setVisioStep] = useState<'IDLE' | 'CALLING' | 'CONNECTED' | 'APPROVED' | 'REJECTED'>('IDLE');
-  const [visioComments, setVisioComments] = useState('');
-  const [citizenHoldingCard, setCitizenHoldingCard] = useState(false);
-
-  // New Account Form State
-  const [newAccForm, setNewAccForm] = useState({
-    name: '',
-    email: '',
-    phoneNumber: '',
-    kycLevel: 1 as KycLevel,
-    idCardNumber: '',
-    documentUrl: '',
-    idCardBackUrl: '',
-    proofOfAddressUrl: ''
-  });
-
-  // Mobile sidebar state
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-
-  // Agents sub tab state ('LIST' or 'REPOSITORY' or 'SETTLEMENTS')
-  const [agentsSubTab, setAgentsSubTab] = useState<'LIST' | 'REPOSITORY' | 'SETTLEMENTS'>('LIST');
-
-  // Sandbox Transaction Form State
-  const [txForm, setTxForm] = useState({
-    type: 'TRANSFER' as TransactionType,
-    amount: '',
-    senderIban: '',
-    receiverIban: '',
-    reference: '',
-    otpCode: '',
-    agentId: ''
-  });
-
-  // Agent Form State
-  const [agentForm, setAgentForm] = useState({
-    name: '',
-    location: '',
-    initialCashRegister: '300000',
-    contractExpiryDate: '2027-06-29',
-    contractFileName: '',
-    contractFileUrl: ''
-  });
-
-  // Selected Agent for contract editing / repository detail
-  const [selectedAgentForContract, setSelectedAgentForContract] = useState<Agent | null>(null);
-  const [showContractEditModal, setShowContractEditModal] = useState(false);
-  const [contractEditForm, setContractEditForm] = useState({
-    contractExpiryDate: '',
-    contractFileName: '',
-    contractFileUrl: '',
-    contractModificationDate: '',
-    contractResiliationDate: ''
-  });
-
-  // Guarantee Form State
-  const [guaranteeForm, setGuaranteeForm] = useState({
-    amount: '50000000',
-    expiryDate: '2026-09-15'
-  });
-
-  // Reconciliation Form State
-  const [reconcileForm, setReconcileForm] = useState({
-    externalBalance: ''
-  });
-
-  // OTP Validation Helpers
-  const [userOtpSecret, setUserOtpSecret] = useState<string>('');
-  const [otpSentMessage, setOtpSentMessage] = useState<string>('');
-
-  // AI OCR simulator states
-  const [ocrScanning, setOcrScanning] = useState(false);
-  const [ocrResult, setOcrResult] = useState<any>(null);
-  const [ocrDocumentType, setOcrDocumentType] = useState<'NATIONAL_ID' | 'PASSPORT'>('NATIONAL_ID');
-
-  // UI Search filters
-  const [accountSearch, setAccountSearch] = useState('');
-  const [txSearch, setTxSearch] = useState('');
   const debouncedAccountSearch = useDebounce(accountSearch, 250);
   const debouncedTxSearch = useDebounce(txSearch, 250);
-
-  // Status Alerts/Notifications
-  const [alertMsg, setAlertMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-
-  // Load all data from API
-  const fetchData = async (showLoadingSpinner = false) => {
-    try {
-      if (showLoadingSpinner) {
-        setLoading(true);
-      }
-      const [
-        resStats,
-        resAccounts,
-        resTransactions,
-        resAgents,
-        resCantonment,
-        resGuarantee,
-        resAuditLogs,
-        resSettlements,
-        resRenewals
-      ] = await Promise.all([
-        ApiClient.get(`/stats?t=${Date.now()}`),
-        ApiClient.get(`/accounts?t=${Date.now()}`),
-        ApiClient.get(`/transactions?t=${Date.now()}`),
-        ApiClient.get(`/agents?t=${Date.now()}`),
-        ApiClient.get(`/cantonment?t=${Date.now()}`),
-        ApiClient.get(`/guarantee?t=${Date.now()}`),
-        ApiClient.get(`/audit-logs?t=${Date.now()}`),
-        ApiClient.get(`/agents/commission/settlements?t=${Date.now()}`),
-        ApiClient.get(`/guarantee/renewals?t=${Date.now()}`)
-      ]);
-
-      setStats(resStats);
-      setAccounts(resAccounts);
-      setTransactions(resTransactions);
-      setAgents(resAgents);
-      setCantonment(resCantonment);
-      setGuarantee(resGuarantee);
-      setAuditLogs(resAuditLogs);
-      setCommissionSettlements(resSettlements || []);
-      setGuaranteeRenewals(resRenewals || []);
-
-      // Get pending compliance counts
-      try {
-        const [resHeld, resMsig] = await Promise.all([
-          fetch(`/api/compliance/held?t=${Date.now()}`).then(r => r.json()),
-          fetch(`/api/compliance/multisig?t=${Date.now()}`).then(r => r.json())
-        ]);
-        const heldPending = Array.isArray(resHeld) ? resHeld.filter((h: any) => h.decision === 'PENDING').length : 0;
-        const msigPending = Array.isArray(resMsig) ? resMsig.filter((m: any) => m.status === 'PENDING_APPROVAL').length : 0;
-        setPendingComplianceCount(heldPending + msigPending);
-      } catch (e) {
-        console.error("Failed to fetch compliance alert badge count:", e);
-      }
-
-      // Sync active user dashboard balance & stats in real-time
-      setCurrentUser(current => {
-        if (!current) return null;
-        const updated = resAccounts.find((a: any) => a.id === current.id);
-        return updated || current;
-      });
-    } catch (err) {
-      console.error("Failed to load platform data:", err);
-      showToast('error', 'Error fetching real-time ledger data. Make sure server.ts is running.');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   useEffect(() => {
     let id: number | null = null;
@@ -255,21 +132,13 @@ export default function App() {
     };
   }, []);
 
-  const showToast = (type: 'success' | 'error', text: string) => {
-    setAlertMsg({ type, text });
-    setTimeout(() => {
-      setAlertMsg(null);
-    }, 6000);
-  };
-
   // Pre-fill fields depending on selected transaction type
   useEffect(() => {
     if (txForm.senderIban) {
       const selectedAcc = accounts.find(a => a.iban === txForm.senderIban);
       if (selectedAcc) {
         // Fetch simulated OTP secret
-        fetch(`/api/otp-secret?email=${encodeURIComponent(selectedAcc.email)}`)
-          .then(r => r.json())
+        ApiService.getOtpSecret(selectedAcc.email)
           .then(data => {
             setUserOtpSecret(data.secret);
           })
@@ -282,13 +151,7 @@ export default function App() {
   const handleOpenAccountSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const response = await fetch('/api/accounts/open', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newAccForm)
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to open account');
+      const data = await ApiService.openAccount(newAccForm);
 
       showToast('success', `Account opened successfully for ${data.name}! Assigned IBAN: ${data.iban}`);
       setShowOpenAccountModal(false);
@@ -317,13 +180,7 @@ export default function App() {
         ? 'https://images.unsplash.com/photo-1554774853-aae0a22c8aa4?w=400&auto=format&fit=crop'
         : 'https://images.unsplash.com/photo-1568605117036-5fe5e7bab0b7?w=400&auto=format&fit=crop';
 
-      const response = await fetch('/api/kyc/ocr', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageUrl: mockImgUrl })
-      });
-      
-      const parsed = await response.json();
+      const parsed = await ApiService.ocrExtract({ imageUrl: mockImgUrl });
       setOcrResult(parsed);
 
       // Pre-fill the open account form with OCR data
@@ -346,16 +203,10 @@ export default function App() {
   const handleTransactionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const response = await fetch('/api/transactions/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...txForm,
-          amount: Number(txForm.amount)
-        })
+      const data = await ApiService.executeTransaction({
+        ...txForm,
+        amount: Number(txForm.amount)
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Ledger violation');
 
       showToast('success', `Transaction success! Ref: ${data.reference}. Balance updated on Double-Entry Ledger.`);
       setShowTransactionModal(false);
@@ -378,21 +229,14 @@ export default function App() {
   const handleAgentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const response = await fetch('/api/agents/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: agentForm.name,
-          location: agentForm.location,
-          initialCashRegister: Number(agentForm.initialCashRegister),
-          contractFileUrl: agentForm.contractFileUrl || '/contracts/mock-signed.pdf',
-          contractFileName: agentForm.contractFileName || 'Article_20_Signed_Contract.pdf',
-          contractExpiryDate: agentForm.contractExpiryDate,
-          contractModificationDate: new Date().toISOString().split('T')[0]
-        })
+      const data = await ApiService.registerAgent({
+        name: agentForm.name,
+        location: agentForm.location,
+        initialCashRegister: String(agentForm.initialCashRegister),
+        contractExpiryDate: agentForm.contractExpiryDate,
+        contractFileUrl: agentForm.contractFileUrl || '/contracts/mock-signed.pdf',
+        contractFileName: agentForm.contractFileName || 'Article_20_Signed_Contract.pdf'
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to register agent');
 
       showToast('success', `Agent ${data.name} successfully onboarded under Article 20 mandates.`);
       setShowAgentModal(false);
@@ -415,19 +259,13 @@ export default function App() {
     e.preventDefault();
     if (!selectedAgentForContract) return;
     try {
-      const response = await fetch(`/api/agents/${selectedAgentForContract.id}/contract`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contractFileUrl: contractEditForm.contractFileUrl || '/contracts/mock-updated.pdf',
-          contractFileName: contractEditForm.contractFileName || 'Article_20_Signed_Contract_Modified.pdf',
-          contractExpiryDate: contractEditForm.contractExpiryDate,
-          contractModificationDate: contractEditForm.contractModificationDate || new Date().toISOString().split('T')[0],
-          contractResiliationDate: contractEditForm.contractResiliationDate || undefined
-        })
+      await ApiService.updateAgentContract(selectedAgentForContract.id, {
+        contractFileUrl: contractEditForm.contractFileUrl || '/contracts/mock-updated.pdf',
+        contractFileName: contractEditForm.contractFileName || 'Article_20_Signed_Contract_Modified.pdf',
+        contractExpiryDate: contractEditForm.contractExpiryDate,
+        contractModificationDate: contractEditForm.contractModificationDate || new Date().toISOString().split('T')[0],
+        contractResiliationDate: contractEditForm.contractResiliationDate || undefined
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to update agent contract');
 
       showToast('success', `Contract for agent ${selectedAgentForContract.name} successfully updated.`);
       setShowContractEditModal(false);
@@ -470,12 +308,7 @@ export default function App() {
   // Toggle Agent Active Status
   const toggleAgentStatus = async (id: string, currentStatus: boolean) => {
     try {
-      const response = await fetch(`/api/agents/${id}/status`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isActive: !currentStatus })
-      });
-      if (!response.ok) throw new Error('Failed to update agent status');
+      await ApiService.updateAgentStatus(id, { isActive: !currentStatus });
       showToast('success', `Agent operational status updated.`);
       fetchData();
     } catch (err: any) {
@@ -486,13 +319,7 @@ export default function App() {
   // --- Commission Settlements Actions ---
   const handleRequestCommissionPayout = async (agentId: string) => {
     try {
-      const response = await fetch('/api/agents/commission/request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to request payout');
+      await ApiService.requestCommission({ agentId, amount: 0 }); // 0 means request all
       showToast('success', `Commission payout requested successfully.`);
       fetchData();
     } catch (err: any) {
@@ -502,13 +329,7 @@ export default function App() {
 
   const handleApproveCommissionPayout = async (settlementId: string) => {
     try {
-      const response = await fetch('/api/agents/commission/approve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settlementId, approvedBy: 'Compliance Officer (Admin)' })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to approve payout');
+      await ApiService.approveCommission({ settlementId });
       showToast('success', `Commission payout approved.`);
       fetchData();
     } catch (err: any) {
@@ -518,13 +339,7 @@ export default function App() {
 
   const handlePayCommissionPayout = async (settlementId: string, ref: string) => {
     try {
-      const response = await fetch('/api/agents/commission/pay', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settlementId, paymentReference: ref })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to process payment');
+      await ApiService.payCommission({ settlementId, paymentReference: ref });
       showToast('success', `Commission payout successfully settled.`);
       fetchData();
     } catch (err: any) {
@@ -535,13 +350,7 @@ export default function App() {
   // --- KYC Appeals Exceptions Actions ---
   const handleRequestKycException = async (accountId: string, reason: string) => {
     try {
-      const response = await fetch(`/api/accounts/${accountId}/kyc-exception-request`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to file appeal');
+      await ApiService.requestKycException(accountId, { reason });
       showToast('success', `KYC supervisor review appeal submitted successfully.`);
       fetchData();
     } catch (err: any) {
@@ -551,13 +360,7 @@ export default function App() {
 
   const handleApproveKycException = async (accountId: string) => {
     try {
-      const response = await fetch(`/api/accounts/${accountId}/kyc-exception-approve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ supervisorName: 'Chief Compliance Officer (Admin)' })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to approve appeal');
+      await ApiService.approveKycException(accountId, { supervisorName: 'Chief Compliance Officer (Admin)' });
       showToast('success', `KYC bypass exception approved. Cooldown cleared!`);
       fetchData();
     } catch (err: any) {
@@ -568,13 +371,7 @@ export default function App() {
   // --- Guarantee Renewals Actions ---
   const handleRequestGuaranteeRenewal = async (amount: number, expiry: string) => {
     try {
-      const response = await fetch('/api/guarantee/renewal-request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount, expiryDate: expiry })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to file renewal');
+      await ApiService.requestGuaranteeRenewal({ amount, expiryDate: expiry });
       showToast('success', `Guarantee renewal request submitted.`);
       fetchData();
     } catch (err: any) {
@@ -584,13 +381,7 @@ export default function App() {
 
   const handleApproveGuaranteeRenewal = async (renewalId: string) => {
     try {
-      const response = await fetch('/api/guarantee/renewal-approve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ renewalId, bankOfficer: 'Bank of Algeria Officer' })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to approve renewal');
+      await ApiService.approveGuaranteeRenewal({ renewalId, bankOfficer: 'Bank of Algeria Officer' });
       showToast('success', `Guarantee renewal approved by bank officer.`);
       fetchData();
     } catch (err: any) {
@@ -600,13 +391,7 @@ export default function App() {
 
   const handleIssueGuaranteeRenewal = async (renewalId: string) => {
     try {
-      const response = await fetch('/api/guarantee/renewal-issue', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ renewalId })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to issue renewal');
+      await ApiService.issueGuaranteeRenewal({ renewalId });
       showToast('success', `Bank Guarantee renewed successfully! Platform active.`);
       fetchData();
     } catch (err: any) {
@@ -618,16 +403,10 @@ export default function App() {
   const handleReconcileSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const response = await fetch('/api/cantonment/reconcile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reconciledBy: 'H. Brahimi (Compliance Officer)',
-          externalBalanceOverride: Number(reconcileForm.externalBalance)
-        })
+      const data = await ApiService.reconcileCantonment({
+        reconciledBy: 'H. Brahimi (Compliance Officer)',
+        externalBalanceOverride: Number(reconcileForm.externalBalance)
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Reconciliation failed');
 
       if (data.status === 'MISMATCH') {
         showToast('error', `RECONCILIATION FAULT DETECTED: Variance of ${data.difference} DA between internal ledger and bank statement.`);
@@ -646,15 +425,10 @@ export default function App() {
   const handleGuaranteeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const response = await fetch('/api/guarantee/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          amount: Number(guaranteeForm.amount),
-          expiryDate: guaranteeForm.expiryDate
-        })
+      await ApiService.updateGuarantee({
+        amount: Number(guaranteeForm.amount),
+        expiryDate: guaranteeForm.expiryDate
       });
-      if (!response.ok) throw new Error('Failed to update bank guarantee');
       showToast('success', 'Bank guarantee details refreshed in accordance with Bank of Algeria instructions.');
       setShowGuaranteeModal(false);
       fetchData();
@@ -666,15 +440,10 @@ export default function App() {
   // Review & Approve/Reject User KYC
   const processKycReview = async (id: string, status: KycStatus) => {
     try {
-      const response = await fetch(`/api/accounts/${id}/kyc-review`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          status,
-          notes: visioComments || 'Standard operator compliance review'
-        })
+      await ApiService.reviewKyc(id, {
+        status,
+        notes: visioComments || 'Standard operator compliance review'
       });
-      if (!response.ok) throw new Error('Review submit failed');
       showToast('success', `KYC review submitted. Account status set to ${status}.`);
       setShowVisioModal(false);
       setSelectedKycAccount(null);
@@ -2126,6 +1895,10 @@ export default function App() {
               transactions={transactions}
               onRefreshAll={() => fetchData(false)}
             />
+          )}
+
+          {activeTab === 'PERFORMANCE' && (
+            <PerformanceView />
           )}
 
         </div>

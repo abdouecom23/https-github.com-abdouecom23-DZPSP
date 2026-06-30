@@ -26,7 +26,7 @@ import {
   ComplianceReport,
   FeeBreakdown,
   ComplianceDecision
-} from '../types';
+} from '../src/types';
 
 const DB_FILE = path.join(process.cwd(), 'data', 'db.json');
 

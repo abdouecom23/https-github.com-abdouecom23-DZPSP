@@ -34,6 +34,7 @@ import {
   LayoutGrid
 } from 'lucide-react';
 import { UserAccount, LedgerTransaction, Agent, KycLevel } from '../types';
+import { ApiService } from '../apiService';
 import { MerchantView } from './MerchantView';
 
 interface UserViewProps {
@@ -217,14 +218,7 @@ export default function UserView({
         otpCode: qrPaymentForm.otpCode
       };
 
-      const response = await fetch('/api/transactions/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Une erreur est survenue lors de l'exécution de la transaction.");
+      const data = await ApiService.executeTransaction(payload);
 
       setActionSuccess(`Paiement de ${qrPaymentForm.amount.toLocaleString()} DA envoyé avec succès à ${qrPaymentForm.recipientName} ! Réf : ${data.reference}`);
       onRefresh();
@@ -279,14 +273,7 @@ export default function UserView({
         otpCode: 'MOCK_BYPASS_FOR_INBOUND' // Inbounds don't strictly require 2FA
       };
 
-      const response = await fetch('/api/transactions/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Une erreur est survenue lors de l'exécution");
+      const data = await ApiService.executeTransaction(payload);
 
       setActionSuccess(`Fonds déposés avec succès ! Réf : ${data.reference}`);
       setAddMoneyForm({ amount: '', method: 'AGENT', agentId: '', cardNumber: '', expiry: '', cvv: '' });
@@ -324,14 +311,7 @@ export default function UserView({
         otpCode: transferForm.otpCode
       };
 
-      const response = await fetch('/api/transactions/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Une erreur est survenue lors du transfert");
+      const data = await ApiService.executeTransaction(payload);
 
       setActionSuccess(`Transfert effectué avec succès ! Réf : ${data.reference}`);
       setTransferForm({ recipientIban: '', amount: '', reference: '', otpCode: '' });
@@ -367,14 +347,7 @@ export default function UserView({
         addressUrl: kycUpgradeForm.addressPdfUrl || 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf'
       };
 
-      const response = await fetch(`/api/accounts/${user.id}/kyc-upgrade`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "La demande de mise à niveau a échoué.");
+      await ApiService.upgradeKyc(user.id, payload);
 
       setActionSuccess(`Documents soumis avec succès pour la mise à niveau KYC Niveau ${kycUpgradeTargetLevel} (Mandat de conformité)`);
       setKycUpgradeForm({
@@ -404,8 +377,7 @@ export default function UserView({
     setActionError(null);
     setActionSuccess(null);
     try {
-      const response = await fetch(`/api/accounts/${user.id}/kyc-cooldown-simulate`, { method: 'POST' });
-      if (!response.ok) throw new Error("Simulation offset failed.");
+      await ApiService.simulateKycCooldown(user.id);
       onRefresh();
       setActionSuccess("Simulation : 1 mois s'est écoulé depuis la rejection. Le délai d'attente est terminé !");
       setTimeout(() => setActionSuccess(null), 5000);
@@ -418,8 +390,7 @@ export default function UserView({
     setActionError(null);
     setActionSuccess(null);
     try {
-      const response = await fetch(`/api/accounts/${user.id}/kyc-reject-simulate`, { method: 'POST' });
-      if (!response.ok) throw new Error("Simulation rejection failed.");
+      await ApiService.simulateKycReject(user.id);
       onRefresh();
       setActionSuccess("Simulation : L'upgrade KYC a été rejeté aujourd'hui. Le délai d'attente de 1 mois est actif.");
       setTimeout(() => setActionSuccess(null), 5000);

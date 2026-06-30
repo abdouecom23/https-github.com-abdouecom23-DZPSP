@@ -4,7 +4,7 @@ import path from 'path';
 import cors from 'cors';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
-import { db } from './src/server/db';
+import { db } from './server/db';
 import { KycLevel, TransactionType } from './src/types';
 
 // Initialize Express
@@ -14,6 +14,78 @@ const PORT = 3000;
 // Apply CORS with basic restrictions (in production this should be strictly tied to frontend origin)
 app.use(cors({ origin: process.env.NODE_ENV === 'production' ? process.env.FRONTEND_URL || false : '*' }));
 app.use(express.json());
+
+// ==========================================
+// PERFORMANCE MONITORING SETUP
+// ==========================================
+
+interface RequestMetric {
+  id: string;
+  timestamp: number;
+  method: string;
+  path: string;
+  statusCode: number;
+  durationMs: number;
+  memoryUsageMb: number;
+}
+
+const metricsHistory: RequestMetric[] = [];
+const MAX_METRICS_HISTORY = 1000;
+
+const endpointStats: Record<string, { count: number; totalDurationMs: number; errors: number }> = {};
+
+function recordRequestMetric(method: string, path: string, statusCode: number, durationMs: number) {
+  const memory = process.memoryUsage();
+  const rssMb = Math.round(memory.rss / 1024 / 1024 * 100) / 100;
+  
+  const metric: RequestMetric = {
+    id: `met-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    timestamp: Date.now(),
+    method,
+    path,
+    statusCode,
+    durationMs,
+    memoryUsageMb: rssMb
+  };
+
+  metricsHistory.unshift(metric);
+  if (metricsHistory.length > MAX_METRICS_HISTORY) {
+    metricsHistory.pop();
+  }
+
+  const normalizedPath = path
+    .replace(/\/api\/accounts\/[a-zA-Z0-9-_\.]+/, '/api/accounts/:id')
+    .replace(/\/api\/transactions\/[a-zA-Z0-9-_\.]+/, '/api/transactions/:id')
+    .replace(/\/api\/agents\/[a-zA-Z0-9-_\.]+/, '/api/agents/:id')
+    .replace(/\/api\/compliance\/blocked\/[a-zA-Z0-9-_\.]+/, '/api/compliance/blocked/:id')
+    .replace(/\/api\/compliance\/held\/[a-zA-Z0-9-_\.]+/, '/api/compliance/held/:id')
+    .replace(/\/api\/compliance\/multisig\/[a-zA-Z0-9-_\.]+/, '/api/compliance/multisig/:id')
+    .replace(/\/api\/compliance\/reports\/[a-zA-Z0-9-_\.]+/, '/api/compliance/reports/:id');
+
+  const key = `${method} ${normalizedPath}`;
+  if (!endpointStats[key]) {
+    endpointStats[key] = { count: 0, totalDurationMs: 0, errors: 0 };
+  }
+  
+  endpointStats[key].count++;
+  endpointStats[key].totalDurationMs += durationMs;
+  if (statusCode >= 400) {
+    endpointStats[key].errors++;
+  }
+}
+
+// Performance tracking middleware
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api') && req.path !== '/api/performance/metrics') {
+    const start = process.hrtime();
+    res.on('finish', () => {
+      const diff = process.hrtime(start);
+      const durationMs = (diff[0] * 1e3 + diff[1] * 1e-6);
+      recordRequestMetric(req.method, req.path, res.statusCode, durationMs);
+    });
+  }
+  next();
+});
 
 // Lazy load Gemini AI to avoid crashing on boot if key is missing
 let aiClient: GoogleGenAI | null = null;
@@ -41,6 +113,52 @@ function getGeminiClient(): GoogleGenAI | null {
 // ==========================================
 // API ROUTES
 // ==========================================
+
+// Performance Metrics
+app.get('/api/performance/metrics', (req, res) => {
+  try {
+    const memory = process.memoryUsage();
+    const uptime = process.uptime();
+    
+    const totalRequests = metricsHistory.length;
+    const totalDuration = metricsHistory.reduce((sum, m) => sum + m.durationMs, 0);
+    const averageDurationMs = totalRequests > 0 ? (totalDuration / totalRequests) : 0;
+    
+    const sortedDurations = [...metricsHistory].map(m => m.durationMs).sort((a, b) => a - b);
+    const p95DurationMs = sortedDurations.length > 0 ? sortedDurations[Math.floor(sortedDurations.length * 0.95)] : 0;
+    const p99DurationMs = sortedDurations.length > 0 ? sortedDurations[Math.floor(sortedDurations.length * 0.99)] : 0;
+    
+    const errorsCount = metricsHistory.filter(m => m.statusCode >= 400).length;
+    const errorRate = totalRequests > 0 ? (errorsCount / totalRequests) * 100 : 0;
+
+    const endpointsList = Object.entries(endpointStats).map(([endpoint, stats]) => ({
+      endpoint,
+      count: stats.count,
+      averageDurationMs: stats.count > 0 ? (stats.totalDurationMs / stats.count) : 0,
+      errors: stats.errors
+    })).sort((a, b) => b.count - a.count);
+
+    res.json({
+      totalRequests,
+      averageDurationMs,
+      p95DurationMs,
+      p99DurationMs,
+      errorRate,
+      uptimeSeconds: uptime,
+      systemMetrics: {
+        cpuLoad: Math.round((process.cpuUsage().user + process.cpuUsage().system) / 10000) / 100,
+        memoryUsagePercent: Math.round((memory.heapUsed / memory.heapTotal) * 10000) / 100,
+        heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024 * 100) / 100,
+        heapTotalMb: Math.round(memory.heapTotal / 1024 / 1024 * 100) / 100,
+        rssMb: Math.round(memory.rss / 1024 / 1024 * 100) / 100
+      },
+      endpoints: endpointsList,
+      recentRequests: metricsHistory.slice(0, 100)
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Global Stats
 app.get('/api/stats', (req, res) => {

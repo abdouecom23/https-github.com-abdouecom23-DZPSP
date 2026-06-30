@@ -1,0 +1,357 @@
+openapi: 3.0.3
+info:
+  title: DinarFlow API Documentation
+  description: |
+    RESTful API interface for DinarFlow, the premier digital ledger and payment service provider system 
+    tailored for compliant Algerian Dinar (DA) micro-transactions.
+    
+    This API provides banking ledger management, real-time sanctions list evaluation, automated 
+    AML regulatory compliance checks (CTR/SAR), agent cash register operations, and sub-millisecond telemetry.
+  version: 1.0.0
+servers:
+  - url: http://localhost:3000/api
+    description: Local development container
+  - url: /api
+    description: Current context proxy (relative)
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Verifies the application container, V8 virtual machine, and persistence layer status.
+      responses:
+        '200':
+          description: API is fully responsive and healthy.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /performance/metrics:
+    get:
+      summary: Real-time system performance telemetry
+      description: Returns historical latency trends, CPU usage, V8 heap usage, router endpoint leaderboard, and live request streaming telemetry.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  totalRequests:
+                    type: integer
+                    example: 412
+                  averageDurationMs:
+                    type: number
+                    example: 12.45
+                  p95DurationMs:
+                    type: number
+                    example: 32.1
+                  p99DurationMs:
+                    type: number
+                    example: 104.5
+                  errorRate:
+                    type: number
+                    example: 0.24
+                  uptimeSeconds:
+                    type: number
+                    example: 86400
+                  systemMetrics:
+                    type: object
+                    properties:
+                      cpuLoad:
+                        type: number
+                        example: 2.3
+                      memoryUsagePercent:
+                        type: number
+                        example: 41.5
+                      heapUsedMb:
+                        type: number
+                        example: 45.2
+                      heapTotalMb:
+                        type: number
+                        example: 128.0
+                      rssMb:
+                        type: number
+                        example: 142.1
+                  endpoints:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        endpoint:
+                          type: string
+                          example: "GET /api/accounts"
+                        count:
+                          type: integer
+                          example: 154
+                        averageDurationMs:
+                          type: number
+                          example: 8.42
+                        errors:
+                          type: integer
+                          example: 0
+
+  /accounts:
+    get:
+      summary: Get all accounts
+      description: Retrieves a list of active user accounts registered in the dynamic ledger.
+      responses:
+        '200':
+          description: List of user accounts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserAccount'
+    post:
+      summary: Register a new bank account
+      description: Onboards a new customer to DinarFlow with a custom-generated Algerian IBAN and KYC Level 1 status.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - email
+                - phoneNumber
+              properties:
+                name:
+                  type: string
+                  example: "Sofiane Brahimi"
+                email:
+                  type: string
+                  example: "sofiane.b@gmail.com"
+                phoneNumber:
+                  type: string
+                  example: "0550123456"
+      responses:
+        '201':
+          description: Account created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAccount'
+
+  /accounts/{id}:
+    get:
+      summary: Get account by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "acc-1"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAccount'
+        '404':
+          description: Account not found
+
+  /transactions:
+    get:
+      summary: Retrieve transaction history
+      description: Fetches a historic list of transfers, cash-ins, cash-outs, and compliance adjustments.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LedgerTransaction'
+    post:
+      summary: Execute ledger transaction
+      description: Submits a payment request. The ledger validates balance limits, KYC caps, IP blacklist status, and beneficiary safety prior to committing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - type
+                - amount
+                - senderIban
+                - receiverIban
+                - reference
+                - ipAddress
+                - deviceId
+              properties:
+                type:
+                  type: string
+                  enum: [TRANSFER, CASH_IN, CASH_OUT]
+                  example: TRANSFER
+                amount:
+                  type: number
+                  example: 10000
+                senderIban:
+                  type: string
+                  example: "DZ54 007 00123 100023450002 95"
+                receiverIban:
+                  type: string
+                  example: "DZ54 007 00123 100023450001 96"
+                reference:
+                  type: string
+                  example: "Invoice Payment"
+                ipAddress:
+                  type: string
+                  example: "197.200.1.5"
+                deviceId:
+                  type: string
+                  example: "web-chrome-client"
+      responses:
+        '200':
+          description: Transaction successfully cleared and committed to the ledger.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerTransaction'
+        '400':
+          description: Invalid request parameters, insufficient funds, or KYC limits violated.
+
+  /compliance/sanctions-check:
+    post:
+      summary: Real-time Sanctions List compliance lookup
+      description: Screens an individual name against high-risk watchlists (OFAC, UN, EU, INTERPOL, ALGERIAN_WATCHLIST).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  example: "Mokhtar Belmokhtar"
+      responses:
+        '200':
+          description: Verification executed successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sanctioned:
+                    type: boolean
+                    example: true
+                  listName:
+                    type: string
+                    example: "ALGERIAN_WATCHLIST"
+                  matchReason:
+                    type: string
+                    example: "Direct match found in state anti-terrorist monitoring gazette."
+
+components:
+  schemas:
+    UserAccount:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "acc-1"
+        name:
+          type: string
+          example: "Sofiane Brahimi"
+        email:
+          type: string
+          example: "sofiane.b@gmail.com"
+        phoneNumber:
+          type: string
+          example: "0550123456"
+        kycLevel:
+          type: integer
+          enum: [1, 2, 3]
+          example: 1
+        kycStatus:
+          type: string
+          enum: [PENDING, ACTIVE, REJECTED, VISIO_PENDING]
+          example: ACTIVE
+        balance:
+          type: number
+          example: 45000
+        iban:
+          type: string
+          example: "DZ54 007 00123 100023450002 95"
+        dailyDebitSum:
+          type: number
+          example: 0
+        dailyDebitLimit:
+          type: number
+          example: 100000
+        balanceCap:
+          type: number
+          example: 100000
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-05-10T14:30:00Z"
+
+    LedgerTransaction:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "tx-20260630-9b4f2c"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-06-30T08:24:56.123Z"
+        type:
+          type: string
+          enum: [TRANSFER, CASH_IN, CASH_OUT, COMPLIANCE_ADJUSTMENT]
+          example: TRANSFER
+        amount:
+          type: number
+          example: 10000
+        senderIban:
+          type: string
+          example: "DZ54 007 00123 100023450002 95"
+        receiverIban:
+          type: string
+          example: "DZ54 007 00123 100023450001 96"
+        reference:
+          type: string
+          example: "Invoice Payment"
+        ipAddress:
+          type: string
+          example: "197.200.1.5"
+        deviceId:
+          type: string
+          example: "web-chrome-client"
+        otpVerified:
+          type: boolean
+          example: true
+        fee:
+          type: number
+          example: 50
+        feeBreakdown:
+          type: object
+          properties:
+            regulatoryFee:
+              type: number
+              example: 10
+            operationalFee:
+              type: number
+              example: 20
+            profitMargin:
+              type: number
+              example: 20
+            total:
+              type: number
+              example: 50

@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  dinarflow-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dinarflow-service
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - FRONTEND_URL=http://localhost:3000
+      # Provide secret variables through a .env file or orchestrator secret vaults
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    volumes:
+      # Persist the JSON-based transaction ledger and database across container restarts
+      - dinarflow-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  dinarflow-data:
+    driver: local

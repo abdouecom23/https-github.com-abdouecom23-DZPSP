@@ -7,6 +7,7 @@ import {
   Scale,
   ShieldCheck,
   Shield,
+  Activity,
 } from 'lucide-react';
 import { NavTab } from '../types';
 
@@ -92,6 +93,14 @@ export default function Sidebar({ activeTab, setActiveTab, kycPendingCount, show
             icon={<Shield className="w-4.5 h-4.5 text-rose-400" />}
             label="Compliance Center"
             badge={pendingComplianceCount && pendingComplianceCount > 0 ? pendingComplianceCount : undefined}
+          />
+
+          <SidebarButton
+            id="tab_performance"
+            active={activeTab === 'PERFORMANCE'}
+            onClick={() => setActiveTab('PERFORMANCE')}
+            icon={<Activity className="w-4.5 h-4.5 text-emerald-400 animate-pulse" />}
+            label="Performance Monitor"
           />
         </nav>
       </div>
