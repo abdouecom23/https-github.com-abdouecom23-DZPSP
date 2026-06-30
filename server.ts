@@ -11,7 +11,8 @@ import { KycLevel, TransactionType } from './src/types';
 const app = express();
 const PORT = 3000;
 
-app.use(cors());
+// Apply CORS with basic restrictions (in production this should be strictly tied to frontend origin)
+app.use(cors({ origin: process.env.NODE_ENV === 'production' ? process.env.FRONTEND_URL || false : '*' }));
 app.use(express.json());
 
 // Lazy load Gemini AI to avoid crashing on boot if key is missing
@@ -491,16 +492,8 @@ app.get('/api/audit-logs/search', (req, res) => {
   }
 });
 
-// TOTP Secret Simulator
-app.get('/api/otp-secret', (req, res) => {
-  try {
-    const email = req.query.email as string;
-    if (!email) return res.status(400).json({ error: 'Email required' });
-    res.json({ secret: db.getTotpSecret(email) });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+// TOTP Secret endpoint removed to prevent secret leak.
+// In a real system, secrets are provisioned once during enrollment.
 
 // Gemini AI OCR pipeline with fallback
 app.post('/api/kyc/ocr', async (req, res) => {
@@ -544,6 +537,16 @@ app.post('/api/kyc/ocr', async (req, res) => {
         mimeType = parts[0].split(':')[1];
         base64Data = parts[1];
       } else {
+        // SSRF Protection: Block localhost and private IP ranges
+        try {
+          const urlObj = new URL(imageUrl);
+          if (['localhost', '127.0.0.1', '0.0.0.0'].includes(urlObj.hostname) || urlObj.hostname.startsWith('10.') || urlObj.hostname.startsWith('192.168.') || urlObj.hostname.match(/^172\.(1[6-9]|2[0-9]|3[0-1])\./)) {
+            return res.status(403).json({ error: 'SSRF blocked: Invalid image URL' });
+          }
+        } catch (e) {
+          return res.status(400).json({ error: 'Invalid URL format' });
+        }
+        
         // Fetch image and convert to base64
         const imgFetch = await fetch(imageUrl);
         const buffer = await imgFetch.arrayBuffer();

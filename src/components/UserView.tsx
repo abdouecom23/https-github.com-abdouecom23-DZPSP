@@ -44,7 +44,6 @@ interface UserViewProps {
   onRefresh: () => void;
   setAppMode: (mode: 'ADMIN' | 'USER') => void;
   setCurrentUser: (user: UserAccount) => void;
-  setAppLayoutMode?: (mode: 'SHOWCASE' | 'CORE') => void;
 }
 
 export default function UserView({ 
@@ -54,8 +53,7 @@ export default function UserView({
   agents, 
   onRefresh, 
   setAppMode, 
-  setCurrentUser,
-  setAppLayoutMode
+  setCurrentUser
 }: UserViewProps) {
   // Navigation tabs inside User Panel
   const [activeUserTab, setActiveUserTab] = useState<'HOME' | 'ACCOUNTS' | 'CARDS' | 'TRANSACTIONS' | 'LIMITS' | 'MERCHANT'>('HOME');
@@ -64,7 +62,6 @@ export default function UserView({
   // Dialog modal states
   const [showAddMoneyModal, setShowAddMoneyModal] = useState(false);
   const [showSendMoneyModal, setShowSendMoneyModal] = useState(false);
-  const [showConvertModal, setShowConvertModal] = useState(false);
   const [showKycUpgradeModal, setShowKycUpgradeModal] = useState(false);
   const [kycUpgradeTargetLevel, setKycUpgradeTargetLevel] = useState<KycLevel>(3);
   const [showVirtualCardModal, setShowVirtualCardModal] = useState(false);
@@ -83,11 +80,6 @@ export default function UserView({
     cardNumber: '',
     expiry: '',
     cvv: ''
-  });
-  const [convertForm, setConvertForm] = useState({
-    fromAmount: '',
-    toAmount: '',
-    currency: 'EUR' as 'EUR' | 'USD'
   });
   const [kycUpgradeForm, setKycUpgradeForm] = useState({
     idNumber: '',
@@ -119,12 +111,6 @@ export default function UserView({
   });
   const [qrOtpTimer, setQrOtpTimer] = useState(0);
   const [simulatedQrOtp, setSimulatedQrOtp] = useState<string>('');
-  
-  // Exchange rates for converter (DZ Parallel vs Bank Rates)
-  const EXCHANGE_RATES = {
-    EUR: { parallel: 245.50, bank: 146.20 },
-    USD: { parallel: 228.00, bank: 134.80 }
-  };
 
   // Filter transactions for this user using space-stripped comparisons
   const cleanIban = (iban: string) => iban.replace(/\s/g, '').toLowerCase();
@@ -361,24 +347,6 @@ export default function UserView({
     } finally {
       setLoadingAction(false);
     }
-  };
-
-  // Mock Convert Parallel Market rates visualizer
-  const handleConvertSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setActionError(null);
-    const amt = Number(convertForm.fromAmount);
-    if (!amt || amt <= 0) {
-      setActionError("Veuillez saisir un montant valide.");
-      return;
-    }
-    
-    // Simulate parallel market conversion
-    const rate = EXCHANGE_RATES[convertForm.currency].parallel;
-    const result = amt / rate;
-    setConvertForm(prev => ({ ...prev, toAmount: result.toFixed(2) }));
-    setActionSuccess(`Simulation de conversion au taux parallèle informel de ${rate} DA.`);
-    setTimeout(() => setActionSuccess(null), 5000);
   };
 
   // Upgrade KYC status via ID doc submission
@@ -703,25 +671,6 @@ export default function UserView({
             {/* Middle and Right Header Actions */}
             <div className="flex items-center gap-3 md:gap-6">
               
-              {/* Local conversion rates tracking (highly valued feature for DZ PSP) */}
-              <div className="hidden lg:flex items-center gap-3 text-xs bg-emerald-50/50 border border-emerald-100 px-3 py-1.5 rounded-xl text-emerald-800">
-                <span className="font-bold flex items-center gap-1"><ArrowUpDown className="w-3.5 h-3.5" /> Parallel Rates:</span>
-                <span className="font-mono">1 EUR = {EXCHANGE_RATES.EUR.parallel} DA</span>
-                <span className="text-slate-300">|</span>
-                <span className="font-mono">1 USD = {EXCHANGE_RATES.USD.parallel} DA</span>
-              </div>
-
-              {/* Back to Compliance Console Button */}
-              {setAppLayoutMode && (
-                <button 
-                  onClick={() => setAppLayoutMode('SHOWCASE')}
-                  className="bg-indigo-600 text-white hover:bg-indigo-500 text-xs font-bold px-2.5 py-2 md:px-3 rounded-xl shadow-sm transition-all flex items-center gap-1.5"
-                >
-                  <Sparkles className="w-3.5 h-3.5 animate-pulse" /> 
-                  <span>Visual Showcase</span>
-                </button>
-              )}
-
               <button 
                 onClick={() => setAppMode('ADMIN')}
                 className="bg-slate-900 text-white hover:bg-slate-800 text-xs font-bold px-2.5 py-2 md:px-3 rounded-xl shadow-sm transition-all flex items-center gap-1.5"
@@ -825,13 +774,6 @@ export default function UserView({
                     className="bg-white border border-slate-200 hover:border-slate-300 text-slate-800 text-xs font-extrabold px-5 py-3 rounded-xl shadow-sm transition-all flex items-center gap-2"
                   >
                     <Send className="w-4 h-4 text-slate-500" /> Send money
-                  </button>
-
-                  <button 
-                    onClick={() => setShowConvertModal(true)}
-                    className="bg-white border border-slate-200 hover:border-slate-300 text-slate-800 text-xs font-extrabold px-5 py-3 rounded-xl shadow-sm transition-all flex items-center gap-2"
-                  >
-                    <ArrowUpDown className="w-4 h-4 text-slate-500" /> Convert
                   </button>
                 </div>
 
@@ -959,25 +901,6 @@ export default function UserView({
                         <div className="text-right">
                           <span className="block text-base font-black text-slate-900">{(user.balance).toLocaleString()} DA</span>
                           <span className="text-[10px] text-emerald-600 font-bold">Primary Account</span>
-                        </div>
-                      </div>
-
-                      {/* Simulated Euro Wallet (Auto-Calculated from parallel rates) */}
-                      <div className="p-4 border border-slate-100 rounded-2xl flex items-center justify-between hover:bg-slate-50/50 transition-all">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center font-bold text-indigo-600">
-                            🇪🇺
-                          </div>
-                          <div>
-                            <span className="text-xs text-indigo-500 font-bold uppercase tracking-wider font-mono">Simulated Euro Sub-account</span>
-                            <span className="block text-sm font-semibold text-slate-500 mt-0.5">DZ71 007 00123 999999999999 03</span>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <span className="block text-base font-black text-indigo-600">
-                            {(user.balance / EXCHANGE_RATES.EUR.parallel).toLocaleString(undefined, {maximumFractionDigits: 2})} €
-                          </span>
-                          <span className="text-[10px] text-slate-400 font-semibold italic">Parallel exchange estimation</span>
                         </div>
                       </div>
 
@@ -2050,86 +1973,6 @@ export default function UserView({
               >
                 {loadingAction ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 <span>Exécuter le virement Double-Entrée</span>
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 3: CONVERT (Parallel Currency Calculator) */}
-      {showConvertModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-xl border border-slate-100 w-full max-w-md p-6 overflow-hidden">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-lg font-extrabold text-slate-900 flex items-center gap-2">
-                <ArrowUpDown className="w-5 h-5 text-slate-600" /> Parallel Market Converter
-              </h3>
-              <button onClick={() => setShowConvertModal(false)} className="text-slate-400 hover:text-slate-700 text-xl font-bold">×</button>
-            </div>
-
-            <form onSubmit={handleConvertSubmit} className="space-y-4">
-              <div>
-                <label className="text-xs font-bold text-slate-400 uppercase block mb-1.5">Devise cible</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setConvertForm(p => ({ ...p, currency: 'EUR' }))}
-                    className={`py-2 rounded-xl border text-xs font-bold transition-all ${
-                      convertForm.currency === 'EUR' 
-                        ? 'border-indigo-600 bg-indigo-50/30 text-indigo-900' 
-                        : 'border-slate-100 text-slate-600'
-                    }`}
-                  >
-                    EUR (Euro)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConvertForm(p => ({ ...p, currency: 'USD' }))}
-                    className={`py-2 rounded-xl border text-xs font-bold transition-all ${
-                      convertForm.currency === 'USD' 
-                        ? 'border-indigo-600 bg-indigo-50/30 text-indigo-900' 
-                        : 'border-slate-100 text-slate-600'
-                    }`}
-                  >
-                    USD (Dollar)
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-bold text-slate-400 uppercase block mb-1.5">Dinar Algérien (DA)</label>
-                  <input 
-                    type="number" 
-                    required
-                    placeholder="Montant en DA" 
-                    value={convertForm.fromAmount}
-                    onChange={(e) => setConvertForm(p => ({ ...p, fromAmount: e.target.value }))}
-                    className="w-full p-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-indigo-600 font-bold"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-slate-400 uppercase block mb-1.5">Équivalent ({convertForm.currency})</label>
-                  <input 
-                    type="text" 
-                    readOnly
-                    placeholder={`Montant en ${convertForm.currency}`} 
-                    value={convertForm.toAmount ? `${convertForm.toAmount} ${convertForm.currency === 'EUR' ? '€' : '$'}` : ''}
-                    className="w-full p-3 rounded-xl border border-slate-100 bg-slate-50 text-sm font-bold font-mono text-indigo-600 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="p-3 bg-emerald-50 text-emerald-800 rounded-xl space-y-1 text-[11px] font-semibold leading-relaxed">
-                <p>• Taux de change Square Port-Saïd (Parallèle) : 1 {convertForm.currency} = {EXCHANGE_RATES[convertForm.currency].parallel} DA</p>
-                <p>• Taux officiel de la Banque d'Algérie : 1 {convertForm.currency} = {EXCHANGE_RATES[convertForm.currency].bank} DA</p>
-              </div>
-
-              <button 
-                type="submit"
-                className="w-full bg-slate-950 text-white font-extrabold py-3 rounded-xl hover:bg-slate-800 transition-all flex items-center justify-center gap-1.5 mt-6"
-              >
-                Calculer la conversion Square
               </button>
             </form>
           </div>

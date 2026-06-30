@@ -52,12 +52,13 @@ import {
 } from './types';
 import Sidebar from './components/Sidebar';
 import UserView from './components/UserView';
-import ShowcaseNavigator from './components/ShowcaseNavigator';
 import ComplianceView from './components/ComplianceView';
+import LedgerTab from './components/LedgerTab';
+import AuditsTab from './components/AuditsTab';
+import { ApiClient } from './apiClient';
 
 export default function App() {
   // Navigation
-  const [appLayoutMode, setAppLayoutMode] = useState<'SHOWCASE' | 'CORE'>('SHOWCASE');
   const [activeTab, setActiveTab] = useState<'DASHBOARD' | 'LEDGER' | 'KYC' | 'AGENTS' | 'RECONCILIATION' | 'AUDITS'>('DASHBOARD');
   const [appMode, setAppMode] = useState<'ADMIN' | 'USER'>('ADMIN');
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
@@ -185,15 +186,15 @@ export default function App() {
         resSettlements,
         resRenewals
       ] = await Promise.all([
-        fetch(`/api/stats?t=${Date.now()}`).then(r => r.json()),
-        fetch(`/api/accounts?t=${Date.now()}`).then(r => r.json()),
-        fetch(`/api/transactions?t=${Date.now()}`).then(r => r.json()),
-        fetch(`/api/agents?t=${Date.now()}`).then(r => r.json()),
-        fetch(`/api/cantonment?t=${Date.now()}`).then(r => r.json()),
-        fetch(`/api/guarantee?t=${Date.now()}`).then(r => r.json()),
-        fetch(`/api/audit-logs?t=${Date.now()}`).then(r => r.json()),
-        fetch(`/api/agents/commission/settlements?t=${Date.now()}`).then(r => r.json()),
-        fetch(`/api/guarantee/renewals?t=${Date.now()}`).then(r => r.json())
+        ApiClient.get(`/stats?t=${Date.now()}`),
+        ApiClient.get(`/accounts?t=${Date.now()}`),
+        ApiClient.get(`/transactions?t=${Date.now()}`),
+        ApiClient.get(`/agents?t=${Date.now()}`),
+        ApiClient.get(`/cantonment?t=${Date.now()}`),
+        ApiClient.get(`/guarantee?t=${Date.now()}`),
+        ApiClient.get(`/audit-logs?t=${Date.now()}`),
+        ApiClient.get(`/agents/commission/settlements?t=${Date.now()}`),
+        ApiClient.get(`/guarantee/renewals?t=${Date.now()}`)
       ]);
 
       setStats(resStats);
@@ -783,17 +784,7 @@ export default function App() {
         </div>
       )}
 
-      {appLayoutMode === 'SHOWCASE' ? (
-        <ShowcaseNavigator
-          accounts={accounts}
-          transactions={transactions}
-          agents={agents}
-          onRefresh={fetchData}
-          setCurrentUser={setCurrentUser}
-          setAppMode={setAppMode}
-          setAppLayoutMode={setAppLayoutMode}
-        />
-      ) : appMode === 'USER' ? (
+      {appMode === 'USER' ? (
         <UserView 
           user={currentUser!} 
           transactions={transactions} 
@@ -802,7 +793,6 @@ export default function App() {
           onRefresh={fetchData}
           setAppMode={setAppMode}
           setCurrentUser={setCurrentUser}
-          setAppLayoutMode={setAppLayoutMode}
         />
       ) : (
         <>
@@ -848,13 +838,6 @@ export default function App() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3 md:gap-6 w-full md:w-auto justify-between md:justify-end">
-            <button
-              onClick={() => setAppLayoutMode('SHOWCASE')}
-              className="text-[10px] md:text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white p-2 md:px-3 rounded-lg flex items-center gap-1.5 transition-all shadow-sm shadow-indigo-600/10"
-            >
-              <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-              <span className="hidden sm:inline">Visual Showcase</span>
-            </button>
             <button 
               onClick={() => {
                 setAppMode(appMode === 'ADMIN' ? 'USER' : 'ADMIN');
@@ -1207,136 +1190,12 @@ export default function App() {
                   </div>
 
                 </div>
-
               </div>
-
             </div>
           )}
 
           {activeTab === 'LEDGER' && (
-            <div className="space-y-8 animate-fadeIn" id="ledger_tab">
-              
-              <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
-                
-                <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-                  <div>
-                    <h3 className="font-extrabold text-slate-800 text-base">Double-Entry Transaction Ledger</h3>
-                    <p className="text-xs text-slate-500 mt-0.5">Real-time immutable tracing of funds movement. Meets central bank regulatory oversight.</p>
-                  </div>
-                  <div className="flex gap-3">
-                    <div className="relative w-72">
-                      <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                      <input
-                        type="text"
-                        placeholder="Search reference, sender or receiver IBAN..."
-                        value={txSearch}
-                        onChange={(e) => setTxSearch(e.target.value)}
-                        className="w-full pl-9 pr-4 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:border-indigo-500 font-mono"
-                      />
-                    </div>
-                    <button
-                      onClick={triggerISO20022Export}
-                      className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2 rounded-lg flex items-center gap-1 transition-all"
-                    >
-                      <FileSpreadsheet className="w-3.5 h-3.5" /> Export XML
-                    </button>
-                  </div>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
-                    <thead className="bg-slate-50 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-100">
-                      <tr>
-                        <th className="px-6 py-3">Transaction ID / Date</th>
-                        <th className="px-6 py-3">Type</th>
-                        <th className="px-6 py-3">Sender / Recipient</th>
-                        <th className="px-6 py-3">Reference / Purpose</th>
-                        <th className="px-6 py-3 text-right">Debit (-)</th>
-                        <th className="px-6 py-3 text-right">Credit (+)</th>
-                        <th className="px-6 py-3 text-right">Fee (DA)</th>
-                        <th className="px-6 py-3 text-center">Auth Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 font-mono text-xs">
-                      {filteredTransactions.length === 0 ? (
-                        <tr>
-                          <td colSpan={8} className="text-center py-8 text-slate-400 text-xs">No ledger transactions found matching criteria.</td>
-                        </tr>
-                      ) : (
-                        filteredTransactions.map((tx) => (
-                          <tr key={tx.id} className="hover:bg-slate-50/50 transition-colors">
-                            <td className="px-6 py-4">
-                              <div>
-                                <p className="font-bold text-slate-900">{tx.id}</p>
-                                <p className="text-[10px] text-slate-400 mt-0.5">{new Date(tx.timestamp).toLocaleString()}</p>
-                              </div>
-                            </td>
-                            <td className="px-6 py-4">
-                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                tx.type.includes('CASH_IN') 
-                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
-                                  : tx.type.includes('CASH_OUT') 
-                                  ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                  : 'bg-indigo-50 text-indigo-700 border border-indigo-200'
-                              }`}>
-                                {tx.type}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4">
-                              <div className="space-y-0.5">
-                                <p className="text-slate-600"><span className="text-[10px] font-bold uppercase text-slate-400">From:</span> {tx.senderIban}</p>
-                                <p className="text-slate-600"><span className="text-[10px] font-bold uppercase text-slate-400">To:</span> {tx.receiverIban}</p>
-                              </div>
-                            </td>
-                            <td className="px-6 py-4 font-sans font-medium text-slate-800">
-                              {tx.reference}
-                            </td>
-                            <td className="px-6 py-4 text-right text-rose-600 font-bold">
-                              {tx.type === 'TRANSFER' || tx.type === 'CASH_OUT' || tx.type === 'AGENT_CASH_OUT' 
-                                ? `-${(tx.amount + tx.fee).toLocaleString()} DA` 
-                                : '-'}
-                            </td>
-                            <td className="px-6 py-4 text-right text-emerald-600 font-bold">
-                              {tx.type === 'TRANSFER' || tx.type === 'CASH_IN' || tx.type === 'AGENT_CASH_IN'
-                                ? `+${tx.amount.toLocaleString()} DA`
-                                : '-'}
-                            </td>
-                            <td className="px-6 py-4 text-right text-slate-500 font-bold">
-                              {tx.fee > 0 ? `${tx.fee.toLocaleString()} DA` : '0'}
-                            </td>
-                            <td className="px-6 py-4 text-center">
-                              <div className="flex flex-col items-center gap-1">
-                                <div className="flex items-center justify-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 py-1 px-2 rounded-lg">
-                                  <Lock className="w-3 h-3 shrink-0" /> Verified 2FA
-                                </div>
-                                {tx.riskScore ? (
-                                  <div className={`inline-flex items-center gap-1 text-[9px] font-extrabold px-2 py-0.5 rounded border ${
-                                    tx.riskScore.score >= 70
-                                      ? 'bg-rose-50 text-rose-700 border-rose-200 animate-pulse'
-                                      : tx.riskScore.score >= 40
-                                      ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                      : 'bg-emerald-50 text-emerald-700 border-emerald-100'
-                                  }`}>
-                                    Risk: {tx.riskScore.score}/100
-                                    {tx.riskScore.factors && tx.riskScore.factors.length > 0 && (
-                                      <span className="opacity-75 font-normal ml-1">({tx.riskScore.factors.join(', ')})</span>
-                                    )}
-                                  </div>
-                                ) : (
-                                  <div className="text-[9px] text-slate-400">Risk: Low</div>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-              </div>
-
-            </div>
+            <LedgerTab transactions={transactions} />
           )}
 
           {activeTab === 'KYC' && (
@@ -2258,54 +2117,7 @@ export default function App() {
           )}
 
           {activeTab === 'AUDITS' && (
-            <div className="space-y-8 animate-fadeIn" id="audits_tab">
-              
-              <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
-                <div className="flex items-center justify-between mb-6">
-                  <div>
-                    <h3 className="font-extrabold text-slate-800 text-base">Immutable System Audits</h3>
-                    <p className="text-xs text-slate-500 mt-0.5">Chronological trail of core compliance activities, OCR logs, and critical triggers.</p>
-                  </div>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
-                    <thead className="bg-slate-50 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-100">
-                      <tr>
-                        <th className="px-6 py-3">Timestamp</th>
-                        <th className="px-6 py-3">Severity</th>
-                        <th className="px-6 py-3 font-mono">Event Type</th>
-                        <th className="px-6 py-3">Action Description Summary</th>
-                        <th className="px-6 py-3">Host Origin</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 font-mono text-xs">
-                      {auditLogs.map((log) => (
-                        <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
-                          <td className="px-6 py-3.5 text-slate-400">{new Date(log.timestamp).toLocaleString()}</td>
-                          <td className="px-6 py-3.5 text-center">
-                            <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${
-                              log.severity === 'CRITICAL' 
-                                ? 'bg-rose-100 text-rose-800 border border-rose-300' 
-                                : log.severity === 'WARNING' 
-                                ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                                : 'bg-slate-100 text-slate-800 border border-slate-300'
-                            }`}>
-                              {log.severity}
-                            </span>
-                          </td>
-                          <td className="px-6 py-3.5 text-slate-900 font-bold">{log.action}</td>
-                          <td className="px-6 py-3.5 font-sans text-slate-600">{log.details}</td>
-                          <td className="px-6 py-3.5 text-slate-400">{log.ipAddress}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-              </div>
-
-            </div>
+            <AuditsTab auditLogs={auditLogs} />
           )}
 
           {activeTab === 'COMPLIANCE' && (
