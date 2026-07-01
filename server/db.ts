@@ -25,7 +25,10 @@ import {
   FailedTransactionRetry,
   ComplianceReport,
   FeeBreakdown,
-  ComplianceDecision
+  ComplianceDecision,
+  DinarBridgeWallet,
+  CIBDepositRecord,
+  ServiceRecharge
 } from '../src/types';
 
 const DB_FILE = path.join(process.cwd(), 'data', 'db.json');
@@ -50,6 +53,9 @@ interface Schema {
   failedTransactionRetries: FailedTransactionRetry[];
   complianceReports: ComplianceReport[];
   complianceDecisions: ComplianceDecision[];
+  dinarBridgeWallets: { [accountId: string]: DinarBridgeWallet };
+  cibDeposits: CIBDepositRecord[];
+  serviceRecharges: ServiceRecharge[];
 }
 
 // Generate an Algerian-like IBAN: DZ54 [BankCode 3-digit] [BranchCode 5-digit] [AccountNum 12-digit] [CheckDigit 2-digit]
@@ -231,7 +237,10 @@ const INITIAL_DB: Schema = {
   multiSigTransactions: [],
   failedTransactionRetries: [],
   complianceReports: [],
-  complianceDecisions: []
+  complianceDecisions: [],
+  dinarBridgeWallets: {},
+  cibDeposits: [],
+  serviceRecharges: []
 };
 
 class JSONDatabase {
@@ -267,6 +276,9 @@ class JSONDatabase {
         if (!this.data.failedTransactionRetries) this.data.failedTransactionRetries = [];
         if (!this.data.complianceReports) this.data.complianceReports = [];
         if (!this.data.complianceDecisions) this.data.complianceDecisions = [];
+        if (!this.data.dinarBridgeWallets) this.data.dinarBridgeWallets = {};
+        if (!this.data.cibDeposits) this.data.cibDeposits = [];
+        if (!this.data.serviceRecharges) this.data.serviceRecharges = [];
         // Sync guarantee status on load
         this.updateGuaranteeStatus();
       } else {
@@ -2041,6 +2053,102 @@ class JSONDatabase {
 
   public getTotpSecret(email: string) {
     return this.data.totpSecrets[email.toLowerCase()] || 'JBSWY3DPEHPK3PXP';
+  }
+
+  // --- DinarBridge & CIB / Service Recharge Methods ---
+
+  public linkDinarBridgeWallet(accountId: string, publicKey: string): void {
+    if (!this.data.dinarBridgeWallets) this.data.dinarBridgeWallets = {};
+    this.data.dinarBridgeWallets[accountId] = {
+      publicKey,
+      dztBalance: 0,
+      lastSynced: new Date().toISOString()
+    };
+    this.save();
+  }
+
+  public getDinarBridgeWallet(accountId: string) {
+    if (!this.data.dinarBridgeWallets) this.data.dinarBridgeWallets = {};
+    return this.data.dinarBridgeWallets[accountId] || null;
+  }
+
+  public recordCIBDeposit(params: {
+    accountId: string;
+    cibTransactionId: string;
+    amount: number;
+    fullName: string;
+    phone: string;
+    email: string;
+    memo: string;
+    paymentUrl?: string;
+  }): CIBDepositRecord {
+    const record: CIBDepositRecord = {
+      id: `cib-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      accountId: params.accountId,
+      cibTransactionId: params.cibTransactionId,
+      amount: params.amount,
+      fullName: params.fullName,
+      phone: params.phone,
+      email: params.email,
+      memo: params.memo,
+      status: 'PENDING',
+      paymentUrl: params.paymentUrl,
+      createdAt: new Date().toISOString()
+    };
+    if (!this.data.cibDeposits) this.data.cibDeposits = [];
+    this.data.cibDeposits.unshift(record);
+    this.save();
+    return record;
+  }
+
+  public getCIBDepositByTransactionId(cibId: string): CIBDepositRecord | null {
+    if (!this.data.cibDeposits) this.data.cibDeposits = [];
+    return this.data.cibDeposits.find(d => d.cibTransactionId === cibId) || null;
+  }
+
+  public confirmCIBDeposit(cibId: string): CIBDepositRecord {
+    if (!this.data.cibDeposits) this.data.cibDeposits = [];
+    const record = this.data.cibDeposits.find(d => d.cibTransactionId === cibId);
+    if (!record) throw new Error("CIB Deposit not found");
+    record.status = 'CONFIRMED';
+    record.confirmedAt = new Date().toISOString();
+    this.save();
+    return record;
+  }
+
+  public getCIBDeposits(): CIBDepositRecord[] {
+    return this.data.cibDeposits || [];
+  }
+
+  public recordServiceRecharge(params: {
+    accountId: string;
+    serviceType: 'PHONE' | 'INTERNET' | 'GAME' | 'BILL';
+    operator: string;
+    target: string;
+    amount: number;
+    offer: string;
+    operationId?: string;
+  }): ServiceRecharge {
+    const record: ServiceRecharge = {
+      id: `svc-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      accountId: params.accountId,
+      serviceType: params.serviceType,
+      operator: params.operator,
+      target: params.target,
+      amount: params.amount,
+      offer: params.offer,
+      status: 'SUCCESS',
+      operationId: params.operationId,
+      createdAt: new Date().toISOString()
+    };
+    if (!this.data.serviceRecharges) this.data.serviceRecharges = [];
+    this.data.serviceRecharges.unshift(record);
+    this.save();
+    return record;
+  }
+
+  public getServiceRecharges(): ServiceRecharge[] {
+    return this.data.serviceRecharges || [];
   }
 }
 

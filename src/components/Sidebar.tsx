@@ -8,6 +8,8 @@ import {
   ShieldCheck,
   Shield,
   Activity,
+  Code2,
+  PlugZap,
 } from 'lucide-react';
 import { NavTab } from '../types';
 

@@ -35,9 +35,9 @@ export default function LedgerTab({ transactions }: LedgerTabProps) {
   };
 
   const filteredTransactions = transactions.filter(tx => 
-    tx.id.toLowerCase().includes(txSearch.toLowerCase()) || 
-    tx.senderIban.toLowerCase().includes(txSearch.toLowerCase()) || 
-    tx.receiverIban.toLowerCase().includes(txSearch.toLowerCase()) ||
+    (tx.id || '').toLowerCase().includes(txSearch.toLowerCase()) || 
+    (tx.senderIban || '').toLowerCase().includes(txSearch.toLowerCase()) || 
+    (tx.receiverIban || '').toLowerCase().includes(txSearch.toLowerCase()) ||
     (tx.reference && tx.reference.toLowerCase().includes(txSearch.toLowerCase()))
   );
 

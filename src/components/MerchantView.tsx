@@ -12,8 +12,16 @@ export function MerchantView({ user, accounts }: MerchantViewProps) {
   const [showQrModal, setShowQrModal] = useState(false);
   const [amount, setAmount] = useState('1500');
   const [reference, setReference] = useState('INV-2026-089');
-  const [merchantIban, setMerchantIban] = useState(user.iban);
+  const [merchantIban, setMerchantIban] = useState(user?.iban || '');
   const [copiedLink, setCopiedLink] = useState(false);
+
+  if (!user) {
+    return (
+      <div className="p-8 text-center text-slate-400 font-semibold text-xs">
+        No active merchant user selected.
+      </div>
+    );
+  }
 
   const selectedMerchant = accounts.find(a => a.iban === merchantIban) || user;
 

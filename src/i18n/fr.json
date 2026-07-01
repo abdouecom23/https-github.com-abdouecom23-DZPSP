@@ -1,0 +1,46 @@
+{
+  "nav": {
+    "home": "Accueil",
+    "features": "Fonctionnalités",
+    "pricing": "Tarification",
+    "docs": "Documentation",
+    "terms": "Conditions",
+    "login": "Espace Marchand"
+  },
+  "hero": {
+    "badge": "Les Paiements Numériques Algériens Réimaginés",
+    "title": "Acceptez les Paiements par Carte en Algérie Instamment",
+    "subtitle": "Intégrez le traitement des cartes locales (Dahabia & CIB) sur votre site web avec une API unique et moderne. Sans complexité, sans dépendance blockchain.",
+    "cta_primary": "Commencer Gratuitement",
+    "cta_secondary": "Explorer les APIs"
+  },
+  "features_section": {
+    "title": "Conçu pour le Commerce Algérien Moderne",
+    "subtitle": "Propulsez les startups à forte croissance, les marketplaces et les commerces physiques avec des paiements infaillibles.",
+    "f1_title": "Paiement Dahabia & CIB",
+    "f1_desc": "Passerelle de paiement unifiée qui gère toutes les autorisations de cartes bancaires locales avec des rapports de règlement immédiats.",
+    "f2_title": "Liens de Paiement Personnalisés",
+    "f2_desc": "Envoyez des liens de facturation personnalisés via WhatsApp, SMS ou Email. Recevez des dinars instantanément sans coder.",
+    "f3_title": "Sondage de Statut Automatique",
+    "f3_desc": "Le moteur de surveillance intelligente garantit que vos transactions sont mises à jour, même si le client ferme l'onglet de paiement.",
+    "f4_title": "API Marchand Robuste",
+    "f4_desc": "Intégrez en toute sécurité grâce à des commandes curl simples, des webhooks détaillés et des environnements de test sandbox."
+  },
+  "pricing_section": {
+    "title": "Tarification Transparente au Volume",
+    "subtitle": "Payez uniquement pour les transactions réussies. Pas de frais d'installation, pas d'engagement mensuel.",
+    "standard_plan": "Marchand Standard",
+    "standard_desc": "Idéal pour les petites entreprises et les boutiques en ligne.",
+    "enterprise_plan": "Échelle Entreprise",
+    "enterprise_desc": "Pour les grandes plateformes nécessitant un accompagnement dédié.",
+    "rate_standard": "1.5% + 5 DA",
+    "rate_enterprise": "Tarification sur volume",
+    "per_tx": "par transaction réussie"
+  },
+  "terms_section": {
+    "title": "Conditions d'Utilisation & Conformité Réglementaire",
+    "subtitle": "Opérant en parfaite conformité avec la réglementation algérienne sur les paiements et le cadre bancaire.",
+    "p1": "En utilisant notre plateforme, vous acceptez nos conditions de vente, y compris les vérifications obligatoires Know Your Business (KYB) et le respect des exigences de lutte contre le blanchiment d'argent.",
+    "p2": "Nous agissons en tant que facilitateur technologique. Tous les fonds de cantonnement des utilisateurs sont détenus dans des comptes de compensation sécurisés et garantis par la banque."
+  }
+}

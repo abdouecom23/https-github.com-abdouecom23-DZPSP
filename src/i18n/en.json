@@ -1,0 +1,46 @@
+{
+  "nav": {
+    "home": "Home",
+    "features": "Features",
+    "pricing": "Pricing",
+    "docs": "Documentation",
+    "terms": "Terms",
+    "login": "Merchant Dashboard"
+  },
+  "hero": {
+    "badge": "Algerian Digital Payments Reimagined",
+    "title": "Accept Card Payments Across Algeria Instantly",
+    "subtitle": "Integrate local card processing (Dahabia & CIB) into your website with a single, modern API. No complex setups. No blockchain dependency.",
+    "cta_primary": "Get Started Free",
+    "cta_secondary": "Explore APIs"
+  },
+  "features_section": {
+    "title": "Built for Modern Algerian Commerce",
+    "subtitle": "Powering high-growth startups, marketplaces, and physical merchants with bulletproof payments.",
+    "f1_title": "Dahabia & CIB Checkout",
+    "f1_desc": "Unified payment gateway that handles all local bank card authorizations smoothly with immediate settlement logs.",
+    "f2_title": "Custom Payment Links",
+    "f2_desc": "Send personalized billing links via WhatsApp, SMS, or Email. Receive dinars instantly without writing code.",
+    "f3_title": "Automated Status Polling",
+    "f3_desc": "Intelligent status monitoring engine ensures your transactions are kept up to date even when customers close the checkout tab.",
+    "f4_title": "Robust Merchant API",
+    "f4_desc": "Integrate securely with simple curl commands, detailed webhooks, and sandbox testing environments."
+  },
+  "pricing_section": {
+    "title": "Transparent, Volume-Based Pricing",
+    "subtitle": "Only pay for successful transactions. No setup fees, no monthly commitments.",
+    "standard_plan": "Standard Merchant",
+    "standard_desc": "Perfect for small businesses and e-commerce stores.",
+    "enterprise_plan": "Enterprise Scale",
+    "enterprise_desc": "For large marketplaces requiring dedicated support.",
+    "rate_standard": "1.5% + 5 DA",
+    "rate_enterprise": "Custom volume pricing",
+    "per_tx": "per successful transaction"
+  },
+  "terms_section": {
+    "title": "Terms of Service & Regulatory Compliance",
+    "subtitle": "Operating in complete compliance with Algerian payment regulations and banking frameworks.",
+    "p1": "By using our platform, you agree to our merchant terms, including mandatory Know Your Business (KYB) checks and adherence to AML (Anti-Money Laundering) requirements.",
+    "p2": "We serve as a technology facilitator. All user safeguarding funds are held in secure, bank-backed compensation accounts with partner financial institutions."
+  }
+}

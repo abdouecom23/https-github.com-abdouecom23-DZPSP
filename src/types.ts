@@ -1,6 +1,6 @@
 export type KycLevel = 1 | 2 | 3;
 export type KycStatus = 'PENDING' | 'ACTIVE' | 'REJECTED' | 'VISIO_PENDING';
-export type NavTab = 'DASHBOARD' | 'LEDGER' | 'KYC' | 'AGENTS' | 'RECONCILIATION' | 'AUDITS' | 'COMPLIANCE' | 'PERFORMANCE';
+export type NavTab = 'DASHBOARD' | 'LEDGER' | 'KYC' | 'AGENTS' | 'RECONCILIATION' | 'AUDITS' | 'COMPLIANCE' | 'PERFORMANCE' | 'DEVELOPER' | 'SERVICES';
 
 export enum KycEscalationStatus {
   NONE = 'NONE',
@@ -34,9 +34,10 @@ export interface UserAccount {
   documentStatusAlert?: 'ACTIVE' | 'EXPIRING_SOON' | 'EXPIRED';
   status?: 'ACTIVE' | 'SUSPENDED' | 'RELATED_SUSPEND_RISK';
   isSuspended?: boolean;
+  dinarWalletKey?: string;
 }
 
-export type TransactionType = 'CASH_IN' | 'CASH_OUT' | 'TRANSFER' | 'AGENT_CASH_IN' | 'AGENT_CASH_OUT';
+export type TransactionType = 'CASH_IN' | 'CASH_OUT' | 'TRANSFER' | 'AGENT_CASH_IN' | 'AGENT_CASH_OUT' | 'BILL_PAYMENT' | 'SERVICE_RECHARGE';
 
 export interface RiskScore {
   transactionId: string;
@@ -247,4 +248,39 @@ export interface ComplianceDecision {
   reason: string;
   decidedAt: string;
 }
+
+export interface DinarBridgeWallet {
+  publicKey: string;
+  dztBalance: number;
+  lastSynced: string | null;
+}
+
+export interface CIBDepositRecord {
+  id: string;
+  accountId: string;
+  cibTransactionId: string;
+  amount: number;
+  fullName: string;
+  phone: string;
+  email: string;
+  memo: string;
+  status: 'PENDING' | 'CONFIRMED' | 'FAILED';
+  paymentUrl?: string;
+  createdAt: string;
+  confirmedAt?: string;
+}
+
+export interface ServiceRecharge {
+  id: string;
+  accountId: string;
+  serviceType: 'PHONE' | 'INTERNET' | 'GAME' | 'BILL';
+  operator: string;
+  target: string;
+  amount: number;
+  offer: string;
+  status: 'PENDING' | 'SUCCESS' | 'FAILED';
+  operationId?: string;
+  createdAt: string;
+}
+
 

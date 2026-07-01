@@ -31,11 +31,17 @@ import {
   X,
   Bell,
   ChevronDown,
-  LayoutGrid
+  LayoutGrid,
+  Code2,
+  PlugZap,
+  Coins
 } from 'lucide-react';
 import { UserAccount, LedgerTransaction, Agent, KycLevel } from '../types';
 import { ApiService } from '../apiService';
 import { MerchantView } from './MerchantView';
+import DeveloperApiTab from './DeveloperApiTab';
+import ServicesTab from './ServicesTab';
+import DztWalletTab from './DztWalletTab';
 
 interface UserViewProps {
   user: UserAccount;
@@ -57,7 +63,7 @@ export default function UserView({
   setCurrentUser
 }: UserViewProps) {
   // Navigation tabs inside User Panel
-  const [activeUserTab, setActiveUserTab] = useState<'HOME' | 'ACCOUNTS' | 'CARDS' | 'TRANSACTIONS' | 'LIMITS' | 'MERCHANT'>('HOME');
+  const [activeUserTab, setActiveUserTab] = useState<'HOME' | 'ACCOUNTS' | 'CARDS' | 'TRANSACTIONS' | 'LIMITS' | 'MERCHANT' | 'DEVELOPER' | 'SERVICES' | 'DZT_WALLET'>('HOME');
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   
   // Dialog modal states
@@ -114,11 +120,11 @@ export default function UserView({
   const [simulatedQrOtp, setSimulatedQrOtp] = useState<string>('');
 
   // Filter transactions for this user using space-stripped comparisons
-  const cleanIban = (iban: string) => iban.replace(/\s/g, '').toLowerCase();
-  const userTxs = transactions.filter(t => 
+  const cleanIban = (iban: string) => (iban || '').replace(/\s/g, '').toLowerCase();
+  const userTxs = user ? transactions.filter(t => 
     cleanIban(t.senderIban) === cleanIban(user.iban) || 
     cleanIban(t.receiverIban) === cleanIban(user.iban)
-  );
+  ) : [];
 
   // Simulated OTP logic for outbound transfers
   useEffect(() => {
@@ -253,6 +259,47 @@ export default function UserView({
         throw new Error("Veuillez saisir un montant valide.");
       }
 
+      if (addMoneyForm.method === 'CARD') {
+        const payload = {
+          accountId: user.id,
+          amount: amountNum,
+          fullName: user.name,
+          phone: user.phoneNumber || '0550112233',
+          email: user.email || 'user@dinarflow.dz',
+          memo: `CIB-TOPUP-${Date.now()}`,
+          returnUrl: window.location.origin
+        };
+        const res = await fetch('/api/ledger-bridge/cib/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const checkoutData = await res.json();
+        
+        if (checkoutData.success) {
+          const cibId = checkoutData.data?.cib_transaction_id || checkoutData.cib_transaction_id;
+          setActionSuccess(`Passerelle de paiement CIB Initialisée. Réf: ${cibId}. Règlement du Grand Livre en cours...`);
+          
+          // Poll the confirmation endpoint after 2.5s to simulate 3D Secure checkout completion
+          setTimeout(async () => {
+            const confirmRes = await fetch(`/api/ledger-bridge/cib/confirm/${cibId}`);
+            const confirmData = await confirmRes.json();
+            
+            if (confirmData.success) {
+              onRefresh();
+              setAddMoneyForm({ amount: '', method: 'AGENT', agentId: '', cardNumber: '', expiry: '', cvv: '' });
+              setShowAddMoneyModal(false);
+              setActionSuccess(null);
+            } else {
+              setActionError("Échec du règlement de la transaction du Grand Livre.");
+            }
+          }, 2500);
+          return; // Early return to let simulation run
+        } else {
+          throw new Error("Échec de la génération du lien CIB.");
+        }
+      }
+
       // If Agent method, verify an active agent is selected
       if (addMoneyForm.method === 'AGENT' && !addMoneyForm.agentId) {
         throw new Error("Veuillez sélectionner un agent agréé pour le dépôt d'espèces.");
@@ -266,9 +313,7 @@ export default function UserView({
         amount: amountNum,
         senderIban: mockSystemIban,
         receiverIban: user.iban,
-        reference: addMoneyForm.method === 'AGENT' 
-          ? `Cash Deposit via Agent ID ${addMoneyForm.agentId}`
-          : `Visa/CIB Card top-up ****${addMoneyForm.cardNumber.slice(-4) || '1234'}`,
+        reference: `Cash Deposit via Agent ID ${addMoneyForm.agentId}`,
         agentId: addMoneyForm.method === 'AGENT' ? addMoneyForm.agentId : undefined,
         otpCode: 'MOCK_BYPASS_FOR_INBOUND' // Inbounds don't strictly require 2FA
       };
@@ -476,7 +521,23 @@ export default function UserView({
   const svgData = getSvgCoordinates();
 
   // Active user list for switching
-  const alternativeUsers = accounts.filter(a => a.id !== user.id);
+  const alternativeUsers = user ? accounts.filter(a => a.id !== user.id) : [];
+
+  if (!user) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-12 text-center bg-slate-50 h-full w-full">
+        <div className="max-w-md p-6 bg-white rounded-3xl border border-slate-100 shadow-sm space-y-4">
+          <p className="text-sm font-semibold text-slate-500">No client account selected. Please open an account first or select an existing client in the Compliance Admin panel.</p>
+          <button
+            onClick={() => setAppMode('ADMIN')}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all"
+          >
+            Go to Admin Panel
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full w-full bg-[#f8fafc] text-slate-800 flex flex-col font-sans overflow-hidden" id="user_portal_root">
@@ -533,16 +594,29 @@ export default function UserView({
                   </button>
 
                   <button
-                    id="user_menu_cards"
-                    onClick={() => { setActiveUserTab('CARDS'); setIsMobileSidebarOpen(false); }}
+                    id="user_menu_services"
+                    onClick={() => { setActiveUserTab('SERVICES'); setIsMobileSidebarOpen(false); }}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${
-                      activeUserTab === 'CARDS'
+                      activeUserTab === 'SERVICES'
                         ? 'bg-slate-100 text-slate-900 font-bold'
                         : 'text-slate-500 hover:bg-slate-50 hover:text-slate-950'
                     }`}
                   >
-                    <CreditCard className="w-4.5 h-4.5" />
-                    <span>Cards</span>
+                    <PlugZap className="w-4.5 h-4.5" />
+                    <span>Digital Services</span>
+                  </button>
+
+                  <button
+                    id="user_menu_dzt_wallet"
+                    onClick={() => { setActiveUserTab('DZT_WALLET'); setIsMobileSidebarOpen(false); }}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                      activeUserTab === 'DZT_WALLET'
+                        ? 'bg-slate-100 text-slate-900 font-bold'
+                        : 'text-slate-500 hover:bg-slate-50 hover:text-slate-950'
+                    }`}
+                  >
+                    <Coins className="w-4.5 h-4.5" />
+                    <span>DZT Bridge Wallet</span>
                   </button>
 
                   <button
@@ -582,6 +656,32 @@ export default function UserView({
                   >
                     <Briefcase className="w-4.5 h-4.5" />
                     <span>Merchant</span>
+                  </button>
+                  
+                  <button
+                    id="user_menu_services"
+                    onClick={() => { setActiveUserTab('SERVICES'); setIsMobileSidebarOpen(false); }}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                      activeUserTab === 'SERVICES'
+                        ? 'bg-slate-100 text-slate-900 font-bold'
+                        : 'text-slate-500 hover:bg-slate-50 hover:text-slate-950'
+                    }`}
+                  >
+                    <PlugZap className="w-4.5 h-4.5" />
+                    <span>Digital Services</span>
+                  </button>
+
+                  <button
+                    id="user_menu_developer"
+                    onClick={() => { setActiveUserTab('DEVELOPER'); setIsMobileSidebarOpen(false); }}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                      activeUserTab === 'DEVELOPER'
+                        ? 'bg-slate-100 text-slate-900 font-bold'
+                        : 'text-slate-500 hover:bg-slate-50 hover:text-slate-950'
+                    }`}
+                  >
+                    <Code2 className="w-4.5 h-4.5" />
+                    <span>Developer API</span>
                   </button>
                 </nav>
 
@@ -632,10 +732,13 @@ export default function UserView({
               <h1 className="text-sm md:text-xl font-extrabold text-slate-900 truncate">
                 {activeUserTab === 'HOME' && 'Home'}
                 {activeUserTab === 'ACCOUNTS' && 'My Accounts'}
-                {activeUserTab === 'CARDS' && 'Virtual Visa Card'}
+                {activeUserTab === 'DZT_WALLET' && 'DZT Bridge Wallet'}
+                {activeUserTab === 'SERVICES' && 'Digital Services'}
                 {activeUserTab === 'TRANSACTIONS' && 'My Ledger Statements'}
                 {activeUserTab === 'LIMITS' && 'Compliance & KYC Limits'}
                 {activeUserTab === 'MERCHANT' && 'Merchant Services'}
+                {activeUserTab === 'DEVELOPER' && 'Developer API'}
+                {activeUserTab === 'SERVICES' && 'Digital Services'}
               </h1>
             </div>
 
@@ -1051,76 +1154,14 @@ export default function UserView({
               </div>
             )}
 
+            {/* TAB CONTENT: SERVICES */}
+            {activeUserTab === 'SERVICES' && (
+              <ServicesTab />
+            )}
+
             {/* TAB CONTENT: CARDS Matches beautiful debit card visuals */}
-            {activeUserTab === 'CARDS' && (
-              <div className="bg-white rounded-2xl border border-slate-100 p-4 sm:p-6 shadow-sm space-y-6">
-                <div className="flex justify-between items-center">
-                  <h3 className="font-extrabold text-sm text-slate-900 uppercase tracking-wider">Virtual Cards</h3>
-                  <button 
-                    onClick={() => setShowVirtualCardModal(true)}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-sm"
-                  >
-                    + Generate virtual CIB Card
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Styled credit card graphic */}
-                  <div className="p-6 h-52 rounded-2xl bg-gradient-to-tr from-slate-900 via-indigo-950 to-indigo-900 text-white shadow-xl relative flex flex-col justify-between overflow-hidden">
-                    <div className="absolute right-0 top-0 opacity-10 pointer-events-none">
-                      <CreditCard className="w-48 h-48 -mr-10 -mt-10" />
-                    </div>
-                    
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <span className="text-xs font-extrabold text-emerald-400 tracking-wider">DINARFLOW PREMIUM</span>
-                        <p className="text-[10px] text-indigo-200 uppercase font-mono mt-0.5">Dual CIB / VISA Wallet</p>
-                      </div>
-                      <div className="w-10 h-7 bg-white/10 rounded-md backdrop-blur-sm border border-white/20 flex items-center justify-center font-bold text-[10px]">
-                        CIB
-                      </div>
-                    </div>
-
-                    <div className="my-4">
-                      <p className="text-lg font-mono tracking-[0.25em] font-extrabold">4102 9283 1029 8837</p>
-                    </div>
-
-                    <div className="flex justify-between items-end">
-                      <div>
-                        <p className="text-[8px] text-indigo-300 font-bold uppercase tracking-wider leading-none">CARDHOLDER</p>
-                        <p className="text-xs font-bold mt-1 uppercase">{user.name}</p>
-                      </div>
-                      <div className="flex gap-4">
-                        <div>
-                          <p className="text-[8px] text-indigo-300 font-bold uppercase tracking-wider leading-none">EXPIRES</p>
-                          <p className="text-xs font-mono font-bold mt-1">09 / 29</p>
-                        </div>
-                        <div>
-                          <p className="text-[8px] text-indigo-300 font-bold uppercase tracking-wider leading-none">CVV</p>
-                          <p className="text-xs font-mono font-bold mt-1">***</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Limits and card info */}
-                  <div className="border border-slate-100 rounded-2xl p-6 bg-slate-50 space-y-4">
-                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider font-mono">Card Settings</h4>
-                    <div className="flex justify-between items-center text-xs font-bold p-2 bg-white border border-slate-100 rounded-xl">
-                      <span className="text-slate-500">ATM Withdrawals Limit</span>
-                      <span className="text-slate-800">50,000 DA / Day</span>
-                    </div>
-                    <div className="flex justify-between items-center text-xs font-bold p-2 bg-white border border-slate-100 rounded-xl">
-                      <span className="text-slate-500">Contactless Payments</span>
-                      <span className="text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full text-[10px] uppercase">Enabled</span>
-                    </div>
-                    <div className="flex justify-between items-center text-xs font-bold p-2 bg-white border border-slate-100 rounded-xl">
-                      <span className="text-slate-500">Card Status</span>
-                      <span className="text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full text-[10px] uppercase">Active</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
+            {activeUserTab === 'DZT_WALLET' && (
+              <DztWalletTab />
             )}
 
             {/* TAB CONTENT: TRANSACTIONS logs */}
@@ -1656,6 +1697,14 @@ export default function UserView({
 
           {activeUserTab === 'MERCHANT' && (
             <MerchantView user={user} accounts={accounts} />
+          )}
+
+          {activeUserTab === 'DEVELOPER' && (
+            <DeveloperApiTab />
+          )}
+
+          {activeUserTab === 'SERVICES' && (
+            <ServicesTab />
           )}
 
         </div>

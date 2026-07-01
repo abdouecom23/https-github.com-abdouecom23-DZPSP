@@ -1,5 +1,18 @@
 import React, { useEffect } from 'react';
 import useDebounce from './hooks/useDebounce';
+import Home from './pages/Home';
+import Features from './pages/Features';
+import Pricing from './pages/Pricing';
+import Docs from './pages/Docs';
+import Terms from './pages/Terms';
+import Overview from './pages/dashboard/Overview';
+import Transactions from './pages/dashboard/Transactions';
+import Invoices from './pages/dashboard/Invoices';
+import PaymentLinks from './pages/dashboard/PaymentLinks';
+import KYB from './pages/dashboard/KYB';
+import Settings from './pages/dashboard/Settings';
+import SimulatedCheckout from './components/SimulatedCheckout';
+import { useTranslation } from './hooks/useTranslation';
 import FocusTrap from './components/FocusTrap';
 import { useAppStore } from './store';
 import { ApiService } from './apiService';
@@ -61,6 +74,26 @@ import PerformanceView from './components/PerformanceView';
 import { ApiClient } from './apiClient';
 
 export default function App() {
+  // Sandbox multi-domain states
+  const [activeDomain, setActiveDomain] = React.useState<'MARKETING' | 'MERCHANT' | 'CLIENT_WALLET' | 'ADMIN_CONSOLE'>('MARKETING');
+  const [marketingPage, setMarketingPage] = React.useState<'HOME' | 'FEATURES' | 'PRICING' | 'DOCS' | 'TERMS'>('HOME');
+  const [merchantPage, setMerchantPage] = React.useState<'OVERVIEW' | 'TRANSACTIONS' | 'INVOICES' | 'LINKS' | 'KYB' | 'SETTINGS'>('OVERVIEW');
+  const [kybStatus, setKybStatus] = React.useState<'APPROVED' | 'PENDING' | 'REJECTED' | 'NOT_STARTED'>('NOT_STARTED');
+  const [checkoutSession, setCheckoutSession] = React.useState<{
+    amount: number;
+    toName: string;
+    ref: string;
+    iban: string;
+  } | null>(null);
+  const [linksPrefill, setLinksPrefill] = React.useState<{
+    amount?: number;
+    ref?: string;
+    email?: string;
+    name?: string;
+  } | null>(null);
+
+  const { t, lang, setLang, isRtl } = useTranslation();
+
   const {
     activeTab, setActiveTab,
     appMode, setAppMode,
@@ -131,6 +164,13 @@ export default function App() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
+
+  // Auto-select first account as current user if none selected
+  useEffect(() => {
+    if (!currentUser && accounts.length > 0) {
+      setCurrentUser(accounts[0]);
+    }
+  }, [currentUser, accounts, setCurrentUser]);
 
   // Pre-fill fields depending on selected transaction type
   useEffect(() => {
@@ -504,9 +544,9 @@ export default function App() {
   );
 
   const filteredTransactions = transactions.filter(t => 
-    t.reference.toLowerCase().includes(debouncedTxSearch.toLowerCase()) ||
-    t.senderIban.includes(debouncedTxSearch) ||
-    t.receiverIban.includes(debouncedTxSearch)
+    (t.reference || '').toLowerCase().includes(debouncedTxSearch.toLowerCase()) ||
+    (t.senderIban || '').includes(debouncedTxSearch) ||
+    (t.receiverIban || '').includes(debouncedTxSearch)
   );
 
   // Get status class for badge
@@ -527,8 +567,9 @@ export default function App() {
 
   const currentCantonmentRecord = cantonment[0] || null;
 
-  return (
-    <div className="flex h-full w-full overflow-hidden bg-slate-50 text-slate-800 font-sans" id="app_container">
+  const renderOriginalApp = () => {
+    return (
+      <div className="flex h-full w-full overflow-hidden bg-slate-50 text-slate-800 font-sans" id="app_container">
       
       {/* Dynamic Toast Alert */}
       {alertMsg && (
@@ -2795,6 +2836,266 @@ export default function App() {
         </div>
       )}
 
+    </div>
+    );
+  };
+
+  return (
+    <div className="flex flex-col h-screen w-full overflow-hidden bg-slate-50">
+      {/* Sandbox Multi-Domain Browser Bar */}
+      <div className="bg-slate-900 text-slate-300 border-b border-slate-950 px-4 py-3 flex flex-col md:flex-row items-center gap-3 justify-between select-none shrink-0" id="sandbox_browser_bar">
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="flex gap-1.5 mr-2">
+            <div className="w-2.5 h-2.5 rounded-full bg-rose-500"></div>
+            <div className="w-2.5 h-2.5 rounded-full bg-amber-500"></div>
+            <div className="w-2.5 h-2.5 rounded-full bg-emerald-500"></div>
+          </div>
+          <span className="text-[9px] font-black tracking-widest bg-indigo-600/30 text-indigo-300 border border-indigo-500/20 px-2 py-0.5 rounded uppercase">AI Sandbox</span>
+        </div>
+        
+        {/* Address bar input */}
+        <div className="flex-1 max-w-xl bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 flex items-center gap-2 text-xs font-mono text-slate-400 select-all font-bold w-full md:w-auto shadow-inner text-center md:text-left">
+          <span className="text-slate-600 select-none">https://</span>
+          <span>
+            {activeDomain === 'MARKETING' && `dzpsp.com/${marketingPage === 'HOME' ? '' : marketingPage.toLowerCase()}`}
+            {activeDomain === 'MERCHANT' && `app.dzpsp.com/${merchantPage.toLowerCase()}`}
+            {activeDomain === 'CLIENT_WALLET' && `client.dzpsp.com/hub`}
+            {activeDomain === 'ADMIN_CONSOLE' && `admin.dzpsp.com/compliance`}
+          </span>
+        </div>
+
+        {/* Domain Selection Tabs */}
+        <div className="flex flex-wrap gap-1.5 justify-center">
+          <button
+            onClick={() => { setActiveDomain('MARKETING'); setAppMode('USER'); }}
+            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+              activeDomain === 'MARKETING' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-950/60 text-slate-400 hover:text-white'
+            }`}
+          >
+            <span>🌐 dzpsp.com</span>
+          </button>
+          <button
+            onClick={() => { setActiveDomain('MERCHANT'); setAppMode('USER'); }}
+            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+              activeDomain === 'MERCHANT' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-950/60 text-slate-400 hover:text-white'
+            }`}
+          >
+            <span>💼 app.dzpsp.com</span>
+          </button>
+          <button
+            onClick={() => { setActiveDomain('CLIENT_WALLET'); setAppMode('USER'); }}
+            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+              activeDomain === 'CLIENT_WALLET' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-950/60 text-slate-400 hover:text-white'
+            }`}
+          >
+            <span>👤 client.dz</span>
+          </button>
+          <button
+            onClick={() => { setActiveDomain('ADMIN_CONSOLE'); setAppMode('ADMIN'); }}
+            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+              activeDomain === 'ADMIN_CONSOLE' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-950/60 text-slate-400 hover:text-white'
+            }`}
+          >
+            <span>🛡️ admin.dz</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Main Viewport Router */}
+      <div className="flex-1 overflow-hidden relative">
+        {/* MARKETING SITE VIEWPORT */}
+        {activeDomain === 'MARKETING' && (
+          <div className="h-full flex flex-col overflow-hidden bg-slate-50" style={{ direction: isRtl ? 'rtl' : 'ltr' }}>
+            <nav className="bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between shrink-0 z-10 shadow-sm">
+              <div className="flex items-center gap-2">
+                <span className="p-1.5 bg-indigo-600 text-white rounded-xl font-black text-xs leading-none">DF</span>
+                <span className="font-black text-slate-900 tracking-tight text-sm sm:text-base">DinarFlow Payments</span>
+              </div>
+
+              <div className="hidden md:flex items-center gap-6">
+                {(['HOME', 'FEATURES', 'PRICING', 'DOCS', 'TERMS'] as const).map((page) => (
+                  <button
+                    key={page}
+                    onClick={() => setMarketingPage(page)}
+                    className={`text-xs font-extrabold capitalize transition-all cursor-pointer ${
+                      marketingPage === page ? 'text-indigo-600 font-black border-b-2 border-indigo-600 pb-1' : 'text-slate-500 hover:text-slate-900'
+                    }`}
+                  >
+                    {t(`nav.${page.toLowerCase()}`)}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1 border border-slate-100 rounded-xl p-1 bg-slate-50 shrink-0">
+                  {(['en', 'fr', 'ar'] as const).map((l) => (
+                    <button
+                      key={l}
+                      onClick={() => setLang(l)}
+                      className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase transition-all cursor-pointer ${
+                        lang === l ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'
+                      }`}
+                    >
+                      {l}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  onClick={() => setActiveDomain('MERCHANT')}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] sm:text-xs px-4 py-2.5 rounded-xl transition-all cursor-pointer shadow-sm shadow-indigo-600/10"
+                >
+                  {t('nav.login')}
+                </button>
+              </div>
+            </nav>
+
+            <div className="flex-1 overflow-y-auto">
+              {marketingPage === 'HOME' && (
+                <Home
+                  onGetStarted={() => { setActiveDomain('MERCHANT'); setMerchantPage('KYB'); }}
+                  onExploreApis={() => setMarketingPage('DOCS')}
+                />
+              )}
+              {marketingPage === 'FEATURES' && <Features />}
+              {marketingPage === 'PRICING' && (
+                <Pricing onSelectPlan={() => { setActiveDomain('MERCHANT'); setMerchantPage('KYB'); }} />
+              )}
+              {marketingPage === 'DOCS' && <Docs />}
+              {marketingPage === 'TERMS' && <Terms />}
+            </div>
+          </div>
+        )}
+
+        {/* MERCHANT PORTAL VIEWPORT */}
+        {activeDomain === 'MERCHANT' && (
+          <div className="h-full flex bg-slate-50 overflow-hidden">
+            <aside className="w-64 bg-slate-900 text-slate-400 shrink-0 hidden md:flex flex-col justify-between p-5 border-r border-slate-950">
+              <div className="space-y-8">
+                <div className="flex items-center gap-2">
+                  <span className="p-1.5 bg-indigo-500 text-white rounded-xl font-black text-xs leading-none">DF</span>
+                  <span className="font-black text-white tracking-tight text-sm">Merchant Hub</span>
+                </div>
+
+                <nav className="space-y-1.5">
+                  {[
+                    { id: 'OVERVIEW', label: 'Overview / Stats' },
+                    { id: 'TRANSACTIONS', label: 'Payment Logs' },
+                    { id: 'INVOICES', label: 'Invoice Center' },
+                    { id: 'LINKS', label: 'Payment Links & QRs' },
+                    { id: 'KYB', label: 'KYB Onboarding' },
+                    { id: 'SETTINGS', label: 'Store Settings' },
+                  ].map((item) => (
+                    <button
+                      key={item.id}
+                      onClick={() => { setMerchantPage(item.id as any); setLinksPrefill(null); }}
+                      className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-between ${
+                        merchantPage === item.id
+                          ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/10'
+                          : 'hover:bg-slate-800/50 hover:text-white text-slate-400'
+                      }`}
+                    >
+                      <span>{item.label}</span>
+                    </button>
+                  ))}
+                </nav>
+              </div>
+
+              <div className="border-t border-slate-800/85 pt-4 space-y-2 text-[10px] font-semibold text-slate-500">
+                <p>Verified Store: <strong className="text-slate-300">Oran Tech Hub</strong></p>
+                <p>Merchant Ref: <strong className="text-slate-300">mch_82bc19a8</strong></p>
+              </div>
+            </aside>
+
+            <div className="flex-1 flex flex-col overflow-hidden">
+              <header className="bg-white border-b border-slate-200 px-6 h-16 flex items-center justify-between shrink-0">
+                <h1 className="font-extrabold text-slate-900 text-sm sm:text-base capitalize">
+                  {merchantPage.toLowerCase()} Panel
+                </h1>
+
+                <div className="flex items-center gap-4">
+                  <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-100/50 px-2 py-0.5 rounded-md uppercase tracking-wider">
+                    ● Sandbox Provider
+                  </span>
+                  <button
+                    onClick={() => { setActiveDomain('ADMIN_CONSOLE'); setAppMode('ADMIN'); }}
+                    className="text-[10px] font-black text-indigo-600 hover:underline cursor-pointer"
+                  >
+                    Switch to compliance admin
+                  </button>
+                </div>
+              </header>
+
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {merchantPage === 'OVERVIEW' && (
+                  <Overview
+                    stats={stats}
+                    transactions={transactions}
+                    kybStatus={kybStatus}
+                    onWithdraw={() => showToast('success', 'Withdrawal request of dinar settlement submitted to compensation partner bank.')}
+                  />
+                )}
+                {merchantPage === 'TRANSACTIONS' && (
+                  <Transactions transactions={transactions} onRefresh={fetchData} />
+                )}
+                {merchantPage === 'INVOICES' && (
+                  <Invoices
+                    onGenerateLink={(amt, reference, email, name) => {
+                      setLinksPrefill({ amount: amt, ref: reference, email, name });
+                      setMerchantPage('LINKS');
+                    }}
+                  />
+                )}
+                {merchantPage === 'LINKS' && (
+                  <PaymentLinks
+                    initialAmount={linksPrefill?.amount}
+                    initialRef={linksPrefill?.ref}
+                    initialEmail={linksPrefill?.email}
+                    initialName={linksPrefill?.name}
+                    onPayLink={(url) => {
+                      const parsed = new URL(url);
+                      const payAmount = Number(parsed.searchParams.get('payAmount') || '1500');
+                      const payToName = parsed.searchParams.get('payToName') || 'Merchant Hub';
+                      const payIban = parsed.searchParams.get('payIban') || 'DZ5400700123100023450001';
+                      const payRef = parsed.searchParams.get('payRef') || 'INV-REF-909';
+
+                      setCheckoutSession({
+                        amount: payAmount,
+                        toName: payToName,
+                        iban: payIban,
+                        ref: payRef
+                      });
+                    }}
+                  />
+                )}
+                {merchantPage === 'KYB' && (
+                  <KYB kybStatus={kybStatus} onUpdateStatus={(stat) => setKybStatus(stat)} />
+                )}
+                {merchantPage === 'SETTINGS' && <Settings />}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ORIGINAL WALLET & COMPLIANCE PORTS */}
+        {(activeDomain === 'CLIENT_WALLET' || activeDomain === 'ADMIN_CONSOLE') && renderOriginalApp()}
+      </div>
+
+      {/* SECURE SATIM AUTHORIZATION GATEWAY OVERLAY MODAL */}
+      {checkoutSession && (
+        <SimulatedCheckout
+          amount={checkoutSession.amount}
+          toMerchantName={checkoutSession.toName}
+          reference={checkoutSession.ref}
+          merchantIban={checkoutSession.iban}
+          onSuccess={() => {
+            setCheckoutSession(null);
+            showToast('success', `Payment of ${checkoutSession.amount} DA cleared and recorded successfully under ledger bridge status callback.`);
+            setMerchantPage('OVERVIEW');
+          }}
+          onCancel={() => setCheckoutSession(null)}
+        />
+      )}
     </div>
   );
 }

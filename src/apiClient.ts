@@ -17,8 +17,16 @@ export class ApiClient {
       }
       return response.json();
     } catch (error: any) {
-      if (retries > 0 && (error.message?.includes('fetch') || error instanceof TypeError)) {
-        console.warn(`Fetch to /api${endpoint} failed. Retrying in ${delay}ms... (${retries} retries left)`);
+      const isTransientError = 
+        error.message?.includes('fetch') || 
+        error instanceof TypeError || 
+        error.message?.includes('HTTP 502') || 
+        error.message?.includes('HTTP 503') || 
+        error.message?.includes('HTTP 504') || 
+        error.message?.includes('Expected JSON response');
+
+      if (retries > 0 && isTransientError) {
+        console.warn(`Fetch to /api${endpoint} failed (${error.message}). Retrying in ${delay}ms... (${retries} retries left)`);
         await new Promise(resolve => setTimeout(resolve, delay));
         return ApiClient.get(endpoint, retries - 1, delay * 1.5);
       }
