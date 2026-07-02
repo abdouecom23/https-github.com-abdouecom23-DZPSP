@@ -404,8 +404,12 @@ class JSONDatabase {
       }
     }
 
-    const index = this.data.accounts.length + 1;
-    const iban = generateAlgerianIBAN(index);
+    let index = this.data.accounts.length + 1;
+    let iban = generateAlgerianIBAN(index);
+    while (this.getAccountByIban(iban)) {
+      index++;
+      iban = generateAlgerianIBAN(index);
+    }
 
     // Limit rules: Level 1 (100k DA), Level 2 (500k DA), Level 3 (1M DA)
     let limit = 100000;
@@ -443,9 +447,13 @@ class JSONDatabase {
 
     this.data.accounts.push(newAccount);
     
-    // Auto-generate TOTP Secret
-    const secrets = ['JBSWY3DPEHPK3PXP', 'KVKVE43VNVGHE23M', 'MZXXE23FNBXGYZJA', 'NB2W443FNDXGYZJO', 'OBQXE23FNBXGYZJO'];
-    this.data.totpSecrets[params.email.toLowerCase()] = secrets[Math.floor(Math.random() * secrets.length)];
+    // Auto-generate TOTP Secret securely
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    let base32Secret = '';
+    for (let i = 0; i < 16; i++) {
+      base32Secret += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    this.data.totpSecrets[params.email.toLowerCase()] = base32Secret;
 
     this.logAudit(
       'ACCOUNT_OPENED', 
@@ -1133,6 +1141,11 @@ class JSONDatabase {
     };
 
     this.data.cantonmentRecords.unshift(record);
+
+    // Prevent unbounded growth by capping cantonmentRecords to 200 entries
+    if (this.data.cantonmentRecords.length > 200) {
+      this.data.cantonmentRecords = this.data.cantonmentRecords.slice(0, 200);
+    }
 
     if (status === 'MISMATCH') {
       this.logAudit(

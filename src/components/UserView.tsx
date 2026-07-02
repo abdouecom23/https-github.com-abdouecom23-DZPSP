@@ -119,6 +119,26 @@ export default function UserView({
   const [qrOtpTimer, setQrOtpTimer] = useState(0);
   const [simulatedQrOtp, setSimulatedQrOtp] = useState<string>('');
 
+  const generateCardDetails = (iban: string) => {
+    let hash = 0;
+    for (let i = 0; i < iban.length; i++) {
+      hash = (hash << 5) - hash + iban.charCodeAt(i);
+      hash |= 0;
+    }
+    const cardPart1 = "5312";
+    const cardPart2 = String(Math.abs((hash * 983) % 10000)).padStart(4, '7');
+    const cardPart3 = String(Math.abs((hash * 473) % 10000)).padStart(4, '2');
+    const cardPart4 = String(Math.abs((hash * 281) % 10000)).padStart(4, '9');
+    const cvv = String(Math.abs((hash * 19) % 1000)).padStart(3, '3');
+    const expiryMonth = String(Math.abs((hash % 12)) + 1).padStart(2, '0');
+    const expiryYear = "29";
+    return {
+      number: `${cardPart1} ${cardPart2} ${cardPart3} ${cardPart4}`,
+      cvv,
+      expiry: `${expiryMonth}/${expiryYear}`
+    };
+  };
+
   // Filter transactions for this user using space-stripped comparisons
   const cleanIban = (iban: string) => (iban || '').replace(/\s/g, '').toLowerCase();
   const userTxs = user ? transactions.filter(t => 
@@ -1620,9 +1640,11 @@ export default function UserView({
                 <div className="flex justify-between items-start">
                   <div>
                     <span className="text-[9px] font-bold tracking-wider text-slate-400 uppercase">DinarFlow Card</span>
-                    <p className="text-xs font-mono font-bold tracking-widest mt-1">4215 •••• •••• 1082</p>
+                    <p className="text-sm font-mono font-bold tracking-widest mt-1">
+                      {generateCardDetails(user.iban).number.replace(/(\d{4}) (\d{4}) (\d{4}) (\d{4})/, '$1 •••• •••• $4')}
+                    </p>
                   </div>
-                  <span className="text-xs bg-indigo-500/20 px-2 py-0.5 rounded font-bold uppercase tracking-wider text-indigo-300 border border-indigo-500/30">Visa</span>
+                  <span className="text-xs bg-indigo-500/20 px-2 py-0.5 rounded font-bold uppercase tracking-wider text-indigo-300 border border-indigo-500/30">CIB</span>
                 </div>
                 <div className="flex justify-between items-end mt-4">
                   <div>
@@ -1631,7 +1653,7 @@ export default function UserView({
                   </div>
                   <div>
                     <span className="text-[8px] text-slate-400 block uppercase">Expiry / CVV</span>
-                    <span className="text-xs font-mono font-bold">06/29 •••</span>
+                    <span className="text-xs font-mono font-bold">{generateCardDetails(user.iban).expiry} • •••</span>
                   </div>
                 </div>
               </div>
@@ -1726,16 +1748,16 @@ export default function UserView({
               </div>
             </button>
 
-            {/* Nav Item: Hub */}
+            {/* Nav Item: Txs */}
             <button
-              onClick={() => setActiveUserTab('MERCHANT')}
+              onClick={() => setActiveUserTab('TRANSACTIONS')}
               className={`flex flex-col items-center justify-center p-2 rounded-full transition-all relative ${
-                activeUserTab === 'MERCHANT' ? 'text-indigo-600 bg-indigo-50/80 px-4' : 'text-slate-400 hover:text-slate-600'
+                activeUserTab === 'TRANSACTIONS' ? 'text-indigo-600 bg-indigo-50/80 px-4' : 'text-slate-400 hover:text-slate-600'
               }`}
             >
               <div className="flex items-center gap-1">
-                <Briefcase className="w-5 h-5" />
-                {activeUserTab === 'MERCHANT' && <span className="text-[10px] font-black tracking-tight">Hub</span>}
+                <History className="w-5 h-5" />
+                {activeUserTab === 'TRANSACTIONS' && <span className="text-[10px] font-black tracking-tight">Txs</span>}
               </div>
             </button>
 
@@ -2219,11 +2241,51 @@ export default function UserView({
               <button onClick={() => setShowVirtualCardModal(false)} className="text-slate-400 hover:text-slate-700 text-xl font-bold">×</button>
             </div>
 
-            <div className="space-y-4 text-center">
+            <div className="space-y-6 text-center">
               <div className="p-4 bg-emerald-50 text-emerald-800 text-xs font-bold rounded-2xl">
                 Carte de débit virtuelle CIB provisionnée avec succès sous licence réglementaire.
               </div>
-              <p className="text-xs text-slate-500 leading-relaxed">
+
+              {/* Physical card visual representation */}
+              <div className="bg-gradient-to-br from-indigo-900 via-purple-900 to-slate-950 text-white rounded-2xl p-6 shadow-xl relative overflow-hidden aspect-[1.586/1] w-full flex flex-col justify-between border border-indigo-700/30">
+                {/* Accent glows */}
+                <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 rounded-full blur-2xl"></div>
+                <div className="absolute bottom-0 left-0 w-32 h-32 bg-purple-500/10 rounded-full blur-2xl"></div>
+
+                <div className="flex justify-between items-start z-10">
+                  <div className="text-left">
+                    <p className="text-[10px] font-bold text-indigo-300 tracking-widest font-mono">DinarFlow Virtual</p>
+                    <p className="text-[9px] text-slate-400 font-mono mt-0.5">CIB DEBIT CARD</p>
+                  </div>
+                  <span className="text-xl font-extrabold italic bg-gradient-to-r from-white via-indigo-200 to-purple-200 bg-clip-text text-transparent">CIB</span>
+                </div>
+
+                {/* Card Number */}
+                <div className="z-10 text-center my-4">
+                  <p className="text-lg md:text-xl font-bold tracking-[0.2em] font-mono text-slate-100 drop-shadow-sm">
+                    {generateCardDetails(user.iban).number}
+                  </p>
+                </div>
+
+                <div className="flex justify-between items-end z-10 text-left font-mono">
+                  <div>
+                    <p className="text-[8px] uppercase text-indigo-300 font-bold tracking-wider">Cardholder</p>
+                    <p className="text-[11px] font-bold text-slate-200 mt-0.5">{user.name}</p>
+                  </div>
+                  <div className="flex gap-4">
+                    <div>
+                      <p className="text-[8px] uppercase text-indigo-300 font-bold tracking-wider">Expiry</p>
+                      <p className="text-[11px] font-bold text-slate-200 mt-0.5">{generateCardDetails(user.iban).expiry}</p>
+                    </div>
+                    <div>
+                      <p className="text-[8px] uppercase text-indigo-300 font-bold tracking-wider">CVV</p>
+                      <p className="text-[11px] font-bold text-slate-200 mt-0.5">{generateCardDetails(user.iban).cvv}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-500 leading-relaxed text-center">
                 Votre carte virtuelle DinarFlow a été rattachée à votre solde DZD. Vous pouvez l'utiliser immédiatement pour des transactions en ligne ou des paiements de factures.
               </p>
               <button 

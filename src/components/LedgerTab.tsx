@@ -64,7 +64,7 @@ export default function LedgerTab({ transactions }: LedgerTabProps) {
               onClick={triggerISO20022Export}
               className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2 rounded-lg flex items-center gap-1 transition-all"
             >
-              <FileSpreadsheet className="w-3.5 h-3.5" /> Export XML
+              <FileSpreadsheet className="w-3.5 h-3.5" /> Export ISO 20022
             </button>
           </div>
         </div>

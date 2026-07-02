@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import useDebounce from './hooks/useDebounce';
 import Home from './pages/Home';
 import Features from './pages/Features';
@@ -140,6 +140,8 @@ export default function App() {
     showToast,
     fetchData
   } = useAppStore();
+
+  const [showReviewDocsModal, setShowReviewDocsModal] = useState(false);
 
   const debouncedAccountSearch = useDebounce(accountSearch, 250);
   const debouncedTxSearch = useDebounce(txSearch, 250);
@@ -486,6 +488,7 @@ export default function App() {
       });
       showToast('success', `KYC review submitted. Account status set to ${status}.`);
       setShowVisioModal(false);
+      setShowReviewDocsModal(false);
       setSelectedKycAccount(null);
       setVisioStep('IDLE');
       setVisioComments('');
@@ -508,32 +511,79 @@ export default function App() {
     }, 2000);
   };
 
-  // ISO 20022 Export Simulator
+  // ISO 20022 Export Simulator (Generates real pain.001.001.03 compliant XML)
   const triggerISO20022Export = () => {
-    const reportData = {
-      MessageHeader: {
-        MessageId: `DIF-${Date.now()}`,
-        CreationDateTime: new Date().toISOString(),
-      },
-      PaymentTransactions: transactions.map(t => ({
-        Id: t.id,
-        Amount: { value: t.amount, currency: "DZD" },
-        Debtor: t.senderIban,
-        Creditor: t.receiverIban,
-        Purpose: t.reference,
-        ExecutionDate: t.timestamp
-      }))
-    };
+    const msgId = `DIF${Date.now()}`;
+    const creDtTm = new Date().toISOString();
+    const nbOfTxs = transactions.length;
+    const ctrlSum = transactions.reduce((sum, t) => sum + t.amount, 0).toFixed(2);
 
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(reportData, null, 2));
+    let txMarkup = '';
+    transactions.forEach((t) => {
+      txMarkup += `
+      <CdtTrfTxInf>
+        <PmtId>
+          <EndToEndId>${t.id}</EndToEndId>
+          <UETR>${t.id.replace('tx-', 'uetr-')}</UETR>
+        </PmtId>
+        <Amt>
+          <InstdAmt Ccy="DZD">${t.amount.toFixed(2)}</InstdAmt>
+        </Amt>
+        <Dbtr>
+          <Nm>${t.senderIban.includes('DZ54') ? 'Algerian Citizen Sender' : 'External Remitter'}</Nm>
+        </Dbtr>
+        <DbtrAcct>
+          <Id>
+            <IBAN>${t.senderIban.replace(/\s/g, '')}</IBAN>
+          </Id>
+        </DbtrAcct>
+        <Cdtr>
+          <Nm>${t.receiverIban.includes('DZ54') ? 'Algerian Citizen Receiver' : 'External Beneficiary'}</Nm>
+        </Cdtr>
+        <CdtrAcct>
+          <Id>
+            <IBAN>${t.receiverIban.replace(/\s/g, '')}</IBAN>
+          </Id>
+        </CdtrAcct>
+        <RmtInf>
+          <Ustrd>${t.reference || 'Interbank Settlement'}</Ustrd>
+        </RmtInf>
+      </CdtTrfTxInf>`;
+    });
+
+    const xmlContent = `<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.001.001.03">
+  <CstmrCdtTrfInitn>
+    <GrpHdr>
+      <MsgId>${msgId}</MsgId>
+      <CreDtTm>${creDtTm}</CreDtTm>
+      <NbOfTxs>${nbOfTxs}</NbOfTxs>
+      <CtrlSum>${ctrlSum}</CtrlSum>
+      <InitgPty>
+        <Nm>DinarFlow Algérie PSP</Nm>
+      </InitgPty>
+    </GrpHdr>
+    <PmtInf>
+      <PmtInfId>PMTINF-${Date.now()}</PmtInfId>
+      <PmtMtd>TRF</PmtMtd>
+      <ReqdExctnDt>${creDtTm.split('T')[0]}</ReqdExctnDt>
+      <Dbtr>
+        <Nm>DinarFlow Clearing Agent</Nm>
+      </Dbtr>
+      ${txMarkup}
+    </PmtInf>
+  </CstmrCdtTrfInitn>
+</Document>`;
+
+    const dataStr = "data:text/xml;charset=utf-8," + encodeURIComponent(xmlContent);
     const downloadAnchor = document.createElement('a');
     downloadAnchor.setAttribute("href", dataStr);
-    downloadAnchor.setAttribute("download", `ISO_20022_SETTLEMENT_${new Date().toISOString().split('T')[0]}.json`);
+    downloadAnchor.setAttribute("download", `ISO_20022_pain_001_${new Date().toISOString().split('T')[0]}.xml`);
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
 
-    showToast('success', 'ISO 20022 structured payment report exported successfully for clearing.');
+    showToast('success', 'ISO 20022 pain.001 XML payment report generated and downloaded successfully.');
   };
 
   // Filtered lists
@@ -676,13 +726,6 @@ export default function App() {
               >
                 <Plus className="w-4 h-4 shrink-0" /> Execute Tx
               </button>
-              <button 
-                id="btn_iso_export"
-                onClick={triggerISO20022Export}
-                className="flex-1 md:flex-none bg-slate-800 hover:bg-slate-700 text-white px-3 md:px-4 py-2 rounded-lg text-[10px] md:text-sm font-bold flex items-center justify-center gap-1.5 transition-all"
-              >
-                <FileText className="w-4 h-4 shrink-0" /> ISO 20022
-              </button>
             </div>
           </div>
         </header>
@@ -718,15 +761,6 @@ export default function App() {
                       </p>
                     </div>
                   </div>
-                  <button 
-                    onClick={() => {
-                      setGuaranteeForm({ amount: String(guarantee.amount), expiryDate: guarantee.expiryDate });
-                      setShowGuaranteeModal(true);
-                    }}
-                    className="bg-slate-900 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-slate-800 transition-all"
-                  >
-                    Update Guarantee Proof
-                  </button>
                 </div>
               )}
 
@@ -765,12 +799,6 @@ export default function App() {
                     ) : (
                       <span className="text-rose-600 flex items-center gap-1 animate-pulse"><AlertTriangle className="w-3 h-3" /> MISMATCH AT DIAL</span>
                     )}
-                    <button 
-                      onClick={() => setShowReconciliationModal(true)} 
-                      className="text-indigo-600 hover:underline uppercase text-[9px]"
-                    >
-                      Audit
-                    </button>
                   </div>
                 </div>
 
@@ -806,7 +834,7 @@ export default function App() {
                       }}
                       className="text-white font-bold underline hover:text-indigo-200"
                     >
-                      Refreshed
+                      Renew
                     </button>
                   </div>
                   <div className="absolute -bottom-6 -right-6 text-indigo-950 opacity-20">
@@ -912,16 +940,8 @@ export default function App() {
                                         : 'bg-slate-100 text-slate-400 cursor-not-allowed'
                                     }`}
                                   >
-                                    Transfer
+                                    Debit Account
                                   </button>
-                                  {acc.kycStatus === 'VISIO_PENDING' && (
-                                    <button
-                                      onClick={() => startVideoConference(acc)}
-                                      className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-2 py-1 rounded-lg text-xs flex items-center gap-1 shadow-sm shadow-amber-500/10"
-                                    >
-                                      <Video className="w-3 h-3" /> Call
-                                    </button>
-                                  )}
                                 </div>
                               </td>
                             </tr>
@@ -979,22 +999,14 @@ export default function App() {
                     </p>
                     <div className="space-y-3">
                       <button 
-                        onClick={() => triggerAIOcrSimulation('DZ_NATIONAL_ID_SAMPLE')}
+                        onClick={() => {
+                          setActiveTab('KYC');
+                          triggerAIOcrSimulation('DZ_NATIONAL_ID_SAMPLE');
+                        }}
                         className="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-between transition-all"
                       >
                         <span className="flex items-center gap-1.5"><Camera className="w-3.5 h-3.5" /> Sample ID Card OCR Scan</span>
                         <span className="bg-indigo-600 text-[9px] px-1.5 py-0.5 rounded font-mono">AI Mode</span>
-                      </button>
-
-                      <button 
-                        onClick={() => {
-                          setReconcileForm({ externalBalance: String(stats?.totalLiabilities || '1360000') });
-                          setShowReconciliationModal(true);
-                        }}
-                        className="w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-between transition-all"
-                      >
-                        <span className="flex items-center gap-1.5"><RefreshCw className="w-3.5 h-3.5" /> Reconcile Cantonment</span>
-                        <span className="text-slate-400 text-[10px]">Verify</span>
                       </button>
                     </div>
                   </div>
@@ -1071,7 +1083,7 @@ export default function App() {
                         onClick={() => setShowOpenAccountModal(true)}
                         className="mt-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg text-center"
                       >
-                        Register Verified Citizen
+                        Open Pre-Filled Account
                       </button>
                     </div>
                   </div>
@@ -1160,8 +1172,7 @@ export default function App() {
                                   <button
                                     onClick={() => {
                                       setSelectedKycAccount(acc);
-                                      setShowVisioModal(true);
-                                      setVisioStep('CONNECTED');
+                                      setShowReviewDocsModal(true);
                                     }}
                                     className="bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg"
                                   >
@@ -1604,12 +1615,9 @@ export default function App() {
                                   <Download className="w-3.5 h-3.5" /> Download
                                 </a>
                               ) : (
-                                <button
-                                  onClick={() => openContractEdit(agent)}
-                                  className="flex-1 bg-amber-50 hover:bg-amber-100 text-amber-700 text-xs font-bold py-2 px-3 rounded-lg flex items-center justify-center gap-1 transition-all border border-amber-200"
-                                >
-                                  <Upload className="w-3.5 h-3.5" /> Upload File
-                                </button>
+                                <div className="flex-1 bg-amber-50 text-amber-700 text-[10px] font-bold px-2 py-1.5 rounded-lg border border-amber-200 flex items-center justify-center gap-1">
+                                  <span>⚠ Missing Contract</span>
+                                </div>
                               )}
                               
                               <button
@@ -2689,6 +2697,88 @@ export default function App() {
               </div>
 
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Level 2 Document Review Modal */}
+      {showReviewDocsModal && selectedKycAccount && (
+        <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-center justify-center p-6 backdrop-blur-md" id="document_review_modal">
+          <div className="bg-slate-900 text-slate-100 rounded-2xl shadow-2xl max-w-4xl w-full border border-slate-800 overflow-hidden flex flex-col h-[650px]">
+            {/* Header */}
+            <div className="p-5 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 bg-indigo-500 rounded-full"></span>
+                  <h3 className="font-bold text-sm tracking-wide">LEVEL 2 DOCUMENT COMPLIANCE CHECK</h3>
+                </div>
+                <p className="text-[10px] text-slate-400 font-mono">Citizen ID verification: {selectedKycAccount.name} ({selectedKycAccount.idCardNumber || 'N/A'})</p>
+              </div>
+              <button 
+                onClick={() => {
+                  setShowReviewDocsModal(false);
+                  setSelectedKycAccount(null);
+                  setVisioComments('');
+                }} 
+                className="text-slate-400 hover:text-white font-bold"
+              >
+                Close
+              </button>
+            </div>
+
+            {/* Document display */}
+            <div className="flex-1 bg-slate-950 p-6 grid grid-cols-2 gap-6 min-h-0 overflow-y-auto">
+              <div className="bg-slate-900 rounded-xl border border-slate-800 p-4 flex flex-col justify-between">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono mb-2 block font-medium">National ID Recto (Front)</span>
+                <div className="flex-1 rounded-lg overflow-hidden bg-slate-950 border border-slate-800 flex items-center justify-center relative min-h-60">
+                  <img 
+                    src={selectedKycAccount.documentUrl || 'https://images.unsplash.com/photo-1554774853-aae0a22c8aa4?w=400&auto=format&fit=crop'} 
+                    alt="National ID Front" 
+                    className="max-h-full max-w-full object-contain"
+                    referrerPolicy="no-referrer"
+                  />
+                </div>
+              </div>
+              <div className="bg-slate-900 rounded-xl border border-slate-800 p-4 flex flex-col justify-between">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono mb-2 block font-medium">National ID Verso (Back)</span>
+                <div className="flex-1 rounded-lg overflow-hidden bg-slate-950 border border-slate-800 flex items-center justify-center relative min-h-60">
+                  <img 
+                    src={selectedKycAccount.idCardBackUrl || 'https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=400&auto=format&fit=crop'} 
+                    alt="National ID Back" 
+                    className="max-h-full max-w-full object-contain"
+                    referrerPolicy="no-referrer"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Footer with decision and comments */}
+            <div className="p-5 bg-slate-950 border-t border-slate-800 flex flex-col md:flex-row gap-4 items-center justify-between">
+              <div className="w-full md:w-1/2 text-left">
+                <label className="block text-[10px] font-bold text-slate-400 uppercase font-mono mb-1">Compliance Notes / Comments</label>
+                <input 
+                  type="text"
+                  placeholder="Enter notes (e.g. ID matches registry, birth date verified)..."
+                  value={visioComments}
+                  onChange={(e) => setVisioComments(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+              <div className="flex gap-3 w-full md:w-auto justify-end">
+                <button
+                  onClick={() => processKycReview(selectedKycAccount.id, 'REJECTED')}
+                  className="flex-1 md:flex-none bg-rose-600 hover:bg-rose-700 text-white font-bold px-4 py-2 rounded-lg text-xs transition-all"
+                >
+                  Reject Application
+                </button>
+                <button
+                  onClick={() => processKycReview(selectedKycAccount.id, 'ACTIVE')}
+                  className="flex-1 md:flex-none bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-lg text-xs transition-all"
+                >
+                  Approve Application
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
