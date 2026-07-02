@@ -147,22 +147,38 @@ export default function App() {
   const debouncedTxSearch = useDebounce(txSearch, 250);
 
   useEffect(() => {
-    let id: number | null = null;
-    const tick = () => fetchData(false);
-    const start = () => { if (!id) id = window.setInterval(tick, 3000); };
-    const stop = () => { if (id) { window.clearInterval(id); id = null; } };
-
     fetchData(true); // Show loading spinner on initial mount
-    start();
+
+    let ws: WebSocket | null = null;
+    import('./apiClient').then(({ ApiClient }) => {
+      ApiClient.getToken().then(token => {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${protocol}//${window.location.host}/api/ws?token=${token}`);
+        
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'DATA_CHANGED') {
+              fetchData(false);
+            }
+          } catch (e) {
+            console.error("Failed to parse websocket message", e);
+          }
+        };
+
+        ws.onclose = () => {
+          console.warn("WebSocket closed");
+        };
+      });
+    });
 
     const handleVisibilityChange = () => {
-      if (document.hidden) stop();
-      else { fetchData(false); start(); }
+      if (!document.hidden) fetchData(false);
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
-      stop();
+      if (ws) ws.close();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);

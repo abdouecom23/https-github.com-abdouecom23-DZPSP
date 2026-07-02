@@ -2,11 +2,78 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import cors from 'cors';
+import helmet from 'helmet';
+import ipaddr from 'ipaddr.js';
+import rateLimit from 'express-rate-limit';
+import jwt from 'jsonwebtoken';
+import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
+import { z } from 'zod';
 import { db } from './server/db';
 import { KycLevel, TransactionType } from './src/types';
 import { EventEmitter } from 'events';
+
+// Validation Schema
+const AccountOpenSchema = z.object({
+  name: z.string().trim().min(3).max(100),
+  email: z.string().email().toLowerCase(),
+  phoneNumber: z.string().regex(/^(\+213|0)(5|6|7)\d{8}$/, 'Invalid Algerian phone number'),
+  kycLevel: z.union([z.number(), z.string().transform(Number)]),
+  idCardNumber: z.string().regex(/^\d{9}$/, 'Invalid ID format').optional(),
+  documentUrl: z.string().url().optional(),
+  idCardBackUrl: z.string().url().optional(),
+  proofOfAddressUrl: z.string().url().optional(),
+  idCardExpiryDate: z.string().optional(),
+  proofOfAddressExpiryDate: z.string().optional()
+});
+
+const TransactionExecuteSchema = z.object({
+  type: z.enum(['CASH_IN', 'CASH_OUT', 'TRANSFER', 'AGENT_CASH_IN', 'AGENT_CASH_OUT', 'SERVICE_PAYMENT', 'MERCHANT_PAYMENT', 'SALARY_PAYMENT', 'TAX_PAYMENT']),
+  amount: z.union([z.number(), z.string().transform(Number)]).refine(val => val > 0, 'Amount must be positive'),
+  senderIban: z.string().min(5),
+  receiverIban: z.string().min(5),
+  reference: z.string().min(1),
+  ipAddress: z.string().optional(),
+  deviceId: z.string().optional(),
+  otpCode: z.string().optional(),
+  agentId: z.string().optional()
+});
+
+const validate = (schema: z.ZodSchema) => (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  try {
+    req.body = schema.parse(req.body);
+    next();
+  } catch (error: any) {
+    res.status(400).json({ 
+      error: 'Validation failed',
+      details: error.errors.map((e: any) => `${e.path.join('.')}: ${e.message}`)
+    });
+  }
+};
+
+const authenticate = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const token = req.headers.authorization?.split(' ')[1] || (req.query.token as string);
+  if (!token) return res.status(401).json({ error: 'No token provided' });
+  
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret');
+    (req as any).user = decoded;
+    next();
+  } catch (err) {
+    res.status(401).json({ error: 'Invalid token' });
+  }
+};
+
+const authorize = (...roles: string[]) => {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const userRole = (req as any).user?.role;
+    if (!roles.includes(userRole) && userRole !== 'ADMIN') { // Admin has access to everything
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    next();
+  };
+};
 
 export const txStream = new EventEmitter();
 
@@ -14,9 +81,49 @@ export const txStream = new EventEmitter();
 const app = express();
 const PORT = 3000;
 
+app.post('/api/auth/token', (req, res) => {
+  // Mock login for admin
+  const token = jwt.sign(
+    { userId: 'admin', role: 'ADMIN', permissions: ['ALL'] }, 
+    process.env.JWT_SECRET || 'fallback_secret', 
+    { expiresIn: '1h' }
+  );
+  res.json({ token });
+});
+
 // Apply CORS with basic restrictions (in production this should be strictly tied to frontend origin)
 app.use(cors({ origin: process.env.NODE_ENV === 'production' ? process.env.FRONTEND_URL || false : '*' }));
 app.use(express.json());
+// app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: process.env.NODE_ENV === 'production' ? undefined : false,
+  crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: false,
+  crossOriginResourcePolicy: false,
+  frameguard: process.env.NODE_ENV === 'production' ? undefined : false,
+}));
+
+// Rate limiting
+app.set('trust proxy', 1);
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: process.env.NODE_ENV === 'production' ? 100 : 10000, // Increase limit in dev
+  message: 'Too many requests, please try again after 15 minutes',
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  validate: {
+    trustProxy: false,
+    xForwardedForHeader: false,
+    default: true
+  }
+});
+
+app.use('/api/', apiLimiter);
+
+app.use('/api', (req, res, next) => {
+  if (req.path === '/auth/token') return next();
+  return authenticate(req, res, next);
+});
 
 // ==========================================
 // PERFORMANCE MONITORING SETUP
@@ -189,7 +296,7 @@ app.get('/api/cib/status/:id', (req, res) => {
 // ==========================================
 // LEDGER BRIDGE (DINA) PROXY ENGINES
 // ==========================================
-const LEDGER_BRIDGE_URL = process.env.SOFIZPAY_SERVICE_URL || 'http://localhost:3001';
+const LEDGER_BRIDGE_URL = process.env.LEDGER_BRIDGE_SERVICE_URL || 'http://localhost:3001';
 
 async function ledgerBridgeCall(path: string, method = 'GET', body?: any) {
   const opts: RequestInit = { method, headers: { 'Content-Type': 'application/json' } };
@@ -304,7 +411,7 @@ app.post('/api/ledger-bridge/cib/create', async (req, res) => {
     if (!acc) return res.status(404).json({ error: 'Account not found' });
 
     const data = await ledgerBridgeCall('/cib/create', 'POST', {
-      account: process.env.SOFIZPAY_MASTER_PUBLIC_KEY || 'GBRIDGE_MASTER_KEY',
+      account: process.env.LEDGER_BRIDGE_MASTER_PUBLIC_KEY || 'GBRIDGE_MASTER_KEY',
       amount,
       full_name: fullName,
       phone,
@@ -344,7 +451,7 @@ app.get('/api/ledger-bridge/cib/confirm/:cibId', async (req, res) => {
       db.executeTransaction({
         type: 'CASH_IN',
         amount: deposit.amount,
-        senderIban: 'SOFIZPAY_CIB',
+        senderIban: 'BRIDGE_CIB',
         receiverIban: db.getAccountById(deposit.accountId)!.iban,
         reference: `CIB-${req.params.cibId}`,
         ipAddress: req.ip || '127.0.0.1',
@@ -574,13 +681,9 @@ app.get('/api/accounts/:id', (req, res) => {
   }
 });
 
-app.post('/api/accounts/open', (req, res) => {
+app.post('/api/accounts/open', validate(AccountOpenSchema), (req, res) => {
   try {
     const { name, email, phoneNumber, kycLevel, idCardNumber, documentUrl, idCardBackUrl, proofOfAddressUrl, idCardExpiryDate, proofOfAddressExpiryDate } = req.body;
-    if (!name || !email || !phoneNumber || !kycLevel) {
-      return res.status(400).json({ error: 'Missing required fields: name, email, phoneNumber, kycLevel' });
-    }
-
     // Check sanctions screening BEFORE opening (Issue #5)
     const sanctions = db.checkSanctionsScreening(name, idCardNumber || '');
     if (sanctions.sanctioned) {
@@ -593,7 +696,7 @@ app.post('/api/accounts/open', (req, res) => {
       name,
       email,
       phoneNumber,
-      kycLevel: Number(kycLevel) as KycLevel,
+      kycLevel: kycLevel as KycLevel,
       idCardNumber,
       documentUrl,
       idCardBackUrl,
@@ -722,13 +825,10 @@ app.get('/api/transactions/search', (req, res) => {
   }
 });
 
-app.post('/api/transactions/execute', (req, res) => {
+app.post('/api/transactions/execute', validate(TransactionExecuteSchema), (req, res) => {
   try {
     const { type, amount, senderIban, receiverIban, reference, ipAddress, deviceId, otpCode, agentId } = req.body;
-    if (!type || !amount || !senderIban || !receiverIban || !reference) {
-      return res.status(400).json({ error: 'Missing required fields: type, amount, senderIban, receiverIban, reference' });
-    }
-
+    
     // High-risk safety check: OTP code is simulated on transfers and Cash-Outs
     const isHighRisk = type === 'TRANSFER' || type === 'CASH_OUT' || type === 'AGENT_CASH_OUT';
     if (isHighRisk && !otpCode) {
@@ -763,7 +863,17 @@ app.get('/api/agents', (req, res) => {
   }
 });
 
-app.post('/api/agents/register', (req, res) => {
+const AgentRegisterSchema = z.object({
+  name: z.string().min(3),
+  location: z.string().min(3),
+  initialCashRegister: z.union([z.number(), z.string().transform(Number)]).refine(val => val >= 0),
+  commercialRegistryNumber: z.string().min(5),
+  taxIdNumber: z.string().min(5),
+  email: z.string().email(),
+  phoneNumber: z.string().regex(/^(\+213|0)(5|6|7)\d{8}$/, 'Invalid Algerian phone number'),
+});
+
+app.post('/api/agents/register', validate(AgentRegisterSchema), (req, res) => {
   try {
     const { 
       name, 
@@ -1000,6 +1110,26 @@ app.get('/api/audit-logs/search', (req, res) => {
 // TOTP Secret endpoint removed to prevent secret leak.
 // In a real system, secrets are provisioned once during enrollment.
 
+function isSafeUrl(urlString: string): boolean {
+  try {
+    const url = new URL(urlString);
+    if (!['http:', 'https:'].includes(url.protocol)) return false;
+    const host = url.hostname;
+    try {
+      const addr = ipaddr.process(host);
+      const range = addr.range();
+      if (range !== 'unicast') {
+        return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+}
+
 // Gemini AI OCR pipeline with fallback
 app.post('/api/kyc/ocr', async (req, res) => {
   const { imageUrl } = req.body;
@@ -1043,13 +1173,8 @@ app.post('/api/kyc/ocr', async (req, res) => {
         base64Data = parts[1];
       } else {
         // SSRF Protection: Block localhost and private IP ranges
-        try {
-          const urlObj = new URL(imageUrl);
-          if (['localhost', '127.0.0.1', '0.0.0.0'].includes(urlObj.hostname) || urlObj.hostname.startsWith('10.') || urlObj.hostname.startsWith('192.168.') || urlObj.hostname.match(/^172\.(1[6-9]|2[0-9]|3[0-1])\./)) {
-            return res.status(403).json({ error: 'SSRF blocked: Invalid image URL' });
-          }
-        } catch (e) {
-          return res.status(400).json({ error: 'Invalid URL format' });
+        if (!isSafeUrl(imageUrl)) {
+          return res.status(403).json({ error: 'SSRF blocked: Invalid image URL' });
         }
         
         // Fetch image and convert to base64
@@ -1259,7 +1384,7 @@ app.get('/api/compliance/decisions', (req, res) => {
 });
 
 // Multi-Sig Large Transfer dual control list
-app.get('/api/compliance/multisig', (req, res) => {
+app.get('/api/compliance/multisig', authorize('ADMIN'), (req, res) => {
   try {
     res.json(db.getMultiSigTransactions());
   } catch (error: any) {
@@ -1267,7 +1392,7 @@ app.get('/api/compliance/multisig', (req, res) => {
   }
 });
 
-app.post('/api/compliance/multisig/:id/sign', (req, res) => {
+app.post('/api/compliance/multisig/:id/sign', authorize('ADMIN'), (req, res) => {
   try {
     const { signerName, status, reason } = req.body;
     if (!signerName || !status) {
@@ -1281,7 +1406,7 @@ app.post('/api/compliance/multisig/:id/sign', (req, res) => {
 });
 
 // Failed Retries Registry
-app.get('/api/compliance/retries', (req, res) => {
+app.get('/api/compliance/retries', authorize('ADMIN'), (req, res) => {
   try {
     res.json(db.getFailedTransactionRetries());
   } catch (error: any) {
@@ -1290,7 +1415,7 @@ app.get('/api/compliance/retries', (req, res) => {
 });
 
 // Compliance CTR / SAR Reports
-app.get('/api/compliance/reports', (req, res) => {
+app.get('/api/compliance/reports', authorize('ADMIN'), (req, res) => {
   try {
     res.json(db.getComplianceReports());
   } catch (error: any) {
@@ -1298,7 +1423,7 @@ app.get('/api/compliance/reports', (req, res) => {
   }
 });
 
-app.post('/api/compliance/reports/sar', (req, res) => {
+app.post('/api/compliance/reports/sar', authorize('ADMIN'), (req, res) => {
   try {
     const { accountId, reason } = req.body;
     if (!accountId || !reason) {
@@ -1311,7 +1436,7 @@ app.post('/api/compliance/reports/sar', (req, res) => {
   }
 });
 
-app.post('/api/compliance/reports/:id/submit', (req, res) => {
+app.post('/api/compliance/reports/:id/submit', authorize('ADMIN'), (req, res) => {
   try {
     const report = db.submitReportToFIU(req.params.id);
     res.json(report);
@@ -1384,8 +1509,44 @@ async function startServer() {
   // Start background compliance safeguarding worker
   startReconciliationWorker();
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`DinarFlow platform running on http://0.0.0.0:${PORT}`);
+  });
+
+  // Setup WebSocket server
+  const wss = new WebSocketServer({ noServer: true });
+  
+  server.on('upgrade', (request, socket, head) => {
+    const url = new URL(request.url || '', `http://${request.headers.host}`);
+    if (url.pathname === '/api/ws') {
+      const token = url.searchParams.get('token');
+      try {
+        if (!token) throw new Error('No token');
+        jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret');
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          wss.emit('connection', ws, request);
+        });
+      } catch (e) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+      }
+    } else {
+      socket.destroy();
+    }
+  });
+
+  wss.on('connection', (ws) => {
+    ws.send(JSON.stringify({ type: 'CONNECTED' }));
+  });
+
+  // Broadcast DB changes
+  db.events.on('data_changed', () => {
+    const msg = JSON.stringify({ type: 'DATA_CHANGED' });
+    wss.clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(msg);
+      }
+    });
   });
 }
 

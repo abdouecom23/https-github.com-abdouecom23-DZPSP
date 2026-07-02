@@ -122,44 +122,50 @@ export default function ComplianceView({ accounts, transactions, onRefreshAll }:
     fetchComplianceData();
 
     setSseStatus('CONNECTING');
-    const eventSource = new EventSource('/api/compliance/stream');
+    let eventSource: EventSource | null = null;
+    
+    import('../apiClient').then(({ ApiClient }) => {
+      ApiClient.getToken().then(token => {
+        eventSource = new EventSource(`/api/compliance/stream?token=${token}`);
 
-    eventSource.onopen = () => {
-      setSseStatus('CONNECTED');
-    };
+        eventSource.onopen = () => {
+          setSseStatus('CONNECTED');
+        };
 
-    eventSource.onmessage = (event) => {
-      try {
-        const parsed = JSON.parse(event.data);
-        if (parsed.connected) {
-          console.log("SSE connected successfully at", parsed.timestamp);
-          return;
-        }
+        eventSource.onmessage = (event) => {
+          try {
+            const parsed = JSON.parse(event.data);
+            if (parsed.connected) {
+              console.log("SSE connected successfully at", parsed.timestamp);
+              return;
+            }
 
-        const log: AuditLog = parsed;
+            const log: AuditLog = parsed;
 
-        // Prepend to realtime logs
-        setRealtimeLogs(prev => [log, ...prev].slice(0, 50));
-        
-        // Dynamic re-triggers
-        fetchComplianceData();
-        onRefreshAll();
-      } catch (err) {
-        console.error("Error parsing SSE event data", err);
-      }
-    };
+            // Prepend to realtime logs
+            setRealtimeLogs(prev => [log, ...prev].slice(0, 50));
+            
+            // Dynamic re-triggers
+            fetchComplianceData();
+            onRefreshAll();
+          } catch (err) {
+            console.error("Error parsing SSE event data", err);
+          }
+        };
 
-    eventSource.onerror = (err) => {
-      console.error("SSE Connection error", err);
-      setSseStatus('DISCONNECTED');
-    };
+        eventSource.onerror = (err) => {
+          console.error("SSE Connection error", err);
+          setSseStatus('DISCONNECTED');
+        };
+      });
+    });
 
     const interval = setInterval(() => {
       fetchComplianceData();
     }, 5000);
 
     return () => {
-      eventSource.close();
+      if (eventSource) eventSource.close();
       clearInterval(interval);
     };
   }, []);

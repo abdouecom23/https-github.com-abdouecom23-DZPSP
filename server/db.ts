@@ -243,9 +243,12 @@ const INITIAL_DB: Schema = {
   serviceRecharges: []
 };
 
+import { EventEmitter } from 'events';
+
 class JSONDatabase {
   private data: Schema = INITIAL_DB;
   private auditListeners: ((log: AuditLog) => void)[] = [];
+  public events = new EventEmitter();
 
   constructor() {
     this.load();
@@ -298,6 +301,7 @@ class JSONDatabase {
       const tempFile = DB_FILE + '.tmp';
       fs.writeFileSync(tempFile, JSON.stringify(this.data, null, 2), 'utf-8');
       fs.renameSync(tempFile, DB_FILE); // atomic rename on POSIX
+      this.events.emit('data_changed');
     } catch (e) {
       console.error("Failed to persist database file atomically", e);
     }
